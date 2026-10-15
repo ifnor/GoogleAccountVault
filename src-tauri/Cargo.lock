@@ -1503,6 +1503,7 @@ dependencies = [
  "totp-rs",
  "uuid",
  "windows",
+ "windows-future",
 ]
 
 [[package]]

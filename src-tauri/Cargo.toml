@@ -30,7 +30,15 @@ thiserror = "2.0"
 hex = "0.4"
 base64 = "0.22"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
-windows = { version = "0.62", features = ["Security_Credentials_UI", "Win32_Security_Cryptography"] }
+windows = { version = "0.62", features = [
+    "Security_Credentials_UI",
+    "Win32_Security_Cryptography",
+    "Win32_System_WinRT",
+    "Win32_Foundation",
+    "Foundation",
+    "Win32_UI_WindowsAndMessaging"
+] }
+windows-future = "0.3"
 
 [profile.release]
 codegen-units = 1

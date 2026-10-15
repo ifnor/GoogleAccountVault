@@ -35,12 +35,15 @@ async fn check_windows_hello_status() -> Result<HelloStatus, String> {
 }
 
 #[tauri::command]
-async fn enable_windows_hello(state: State<'_, AppState>) -> Result<(), String> {
+async fn enable_windows_hello(window: tauri::WebviewWindow, state: State<'_, AppState>) -> Result<(), String> {
     let password = {
         let guard = state.master_password.read();
         guard.as_ref().ok_or("请先解锁保险库后再启用 Windows Hello")?.clone()
     };
-    let verified = hello::verify_user_consent("验证身份以启用 Windows Hello / PIN 快速解锁").await?;
+    let _ = window.show();
+    let _ = window.set_focus();
+    let raw_hwnd = window.hwnd().ok().map(|h| h.0 as isize);
+    let verified = hello::verify_user_consent("验证身份以启用 Windows Hello / PIN 快速解锁", raw_hwnd).await?;
     if !verified {
         return Err("身份验证未通过或已取消".to_string());
     }
@@ -54,8 +57,11 @@ fn disable_windows_hello() -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn unlock_vault_with_hello(state: State<'_, AppState>) -> Result<Vec<AccountRecord>, String> {
-    let verified = hello::verify_user_consent("验证 Windows Hello / PIN 身份以解锁 Google 账号管家").await?;
+async fn unlock_vault_with_hello(window: tauri::WebviewWindow, state: State<'_, AppState>) -> Result<Vec<AccountRecord>, String> {
+    let _ = window.show();
+    let _ = window.set_focus();
+    let raw_hwnd = window.hwnd().ok().map(|h| h.0 as isize);
+    let verified = hello::verify_user_consent("验证 Windows Hello / PIN 身份以解锁 Google 账号管家", raw_hwnd).await?;
     if !verified {
         return Err("身份验证未通过或已取消".to_string());
     }

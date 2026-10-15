@@ -145,8 +145,12 @@ pub fn get_hello_credentials() -> Result<String, String> {
     String::from_utf8(decrypted).map_err(|e| format!("解析凭据失败: {e}"))
 }
 
-use windows::core::HSTRING;
+use windows::core::{factory, HSTRING};
+use windows::Win32::Foundation::HWND;
+use windows::Win32::System::WinRT::IUserConsentVerifierInterop;
+use windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
 use windows::Security::Credentials::UI::{UserConsentVerificationResult, UserConsentVerifier, UserConsentVerifierAvailability};
+use windows_future::IAsyncOperation;
 
 pub async fn check_hello_availability() -> Result<bool, String> {
     let op = UserConsentVerifier::CheckAvailabilityAsync()
@@ -155,8 +159,30 @@ pub async fn check_hello_availability() -> Result<bool, String> {
     Ok(status == UserConsentVerifierAvailability::Available)
 }
 
-pub async fn verify_user_consent(prompt: &str) -> Result<bool, String> {
+pub async fn verify_user_consent(prompt: &str, raw_hwnd: Option<isize>) -> Result<bool, String> {
     let prompt_h = HSTRING::from(prompt);
+
+    if let Some(h_val) = raw_hwnd {
+        let hwnd = HWND(h_val as *mut std::ffi::c_void);
+        unsafe {
+            let _ = SetForegroundWindow(hwnd);
+        }
+
+        let maybe_op = if let Ok(interop) = factory::<UserConsentVerifier, IUserConsentVerifierInterop>() {
+            let async_op: windows::core::Result<IAsyncOperation<UserConsentVerificationResult>> = unsafe {
+                interop.RequestVerificationForWindowAsync(hwnd, &prompt_h)
+            };
+            async_op.ok()
+        } else {
+            None
+        };
+
+        if let Some(op) = maybe_op {
+            let result = op.await.map_err(|e| format!("验证执行失败: {e}"))?;
+            return Ok(result == UserConsentVerificationResult::Verified);
+        }
+    }
+
     let op = UserConsentVerifier::RequestVerificationAsync(&prompt_h)
         .map_err(|e| format!("请求 Windows Hello 验证失败: {e}"))?;
     let result = op.await.map_err(|e| format!("验证执行失败: {e}"))?;
