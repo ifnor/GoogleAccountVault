@@ -2,7 +2,6 @@
 import { ref, computed, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import {
-  Shield,
   Lock,
   Unlock,
   Search,
@@ -905,9 +904,9 @@ const passwordStrength = computed(() => {
     <!-- 1. LOCK / UNLOCK SCREEN -->
     <div v-if="!isUnlocked" class="flex-1 flex items-center justify-center p-6 relative">
       <div class="w-full max-w-md bg-white rounded-3xl p-8 shadow-sm border border-[#dadce0]/70 flex flex-col items-center">
-        <!-- Google Brand Icon -->
-        <div class="w-16 h-16 rounded-2xl bg-[#e8f0fe] flex items-center justify-center mb-5 text-[#1a73e8]">
-          <Shield class="w-8 h-8" />
+        <!-- Google Brand Logo -->
+        <div class="w-16 h-16 rounded-2xl bg-white shadow-sm border border-[#dadce0]/70 flex items-center justify-center mb-5 p-2.5 overflow-hidden">
+          <img src="/logo.png" alt="Google 账号管家 Logo" class="w-full h-full object-contain" />
         </div>
         <h1 class="text-2xl font-bold tracking-tight text-[#202124] mb-1">Google 账号管家</h1>
         <p class="text-sm text-[#5f6368] mb-6 flex items-center gap-1.5">
@@ -982,8 +981,8 @@ const passwordStrength = computed(() => {
       <header class="h-14 bg-white border-b border-[#dadce0] px-4 flex items-center justify-between gap-4 flex-shrink-0 z-10">
         <!-- Brand -->
         <div class="flex items-center gap-3">
-          <div class="w-8 h-8 rounded-lg bg-[#e8f0fe] flex items-center justify-center text-[#1a73e8]">
-            <Shield class="w-5 h-5" />
+          <div class="w-8 h-8 rounded-lg bg-white border border-[#dadce0]/60 flex items-center justify-center p-0.5 overflow-hidden shadow-xs">
+            <img src="/logo.png" alt="Logo" class="w-full h-full object-contain" />
           </div>
           <div class="flex items-baseline gap-2">
             <span class="font-bold text-base text-[#202124] tracking-tight">Google 账号管家</span>
