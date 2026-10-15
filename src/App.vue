@@ -22,6 +22,8 @@ import {
   Clock,
   Info,
   AlertCircle,
+  AlertTriangle,
+  CheckCircle2,
   Compass,
   Upload,
   Cloud,
@@ -71,6 +73,66 @@ const currentGroup = ref<string | null>(null);
 // TOTP Cache & Timer
 const totpMap = ref<Record<string, TotpResult>>({});
 let totpTimer: number | null = null;
+
+// Custom In-App Toast & Confirmation Dialog System
+interface ToastItem {
+  id: number;
+  message: string;
+  type: "success" | "error" | "warning" | "info";
+}
+const toasts = ref<ToastItem[]>([]);
+let toastCounter = 0;
+
+function notify(message: string, type: "success" | "error" | "warning" | "info" = "info", duration = 3200) {
+  const id = ++toastCounter;
+  toasts.value.push({ id, message, type });
+  setTimeout(() => {
+    toasts.value = toasts.value.filter(t => t.id !== id);
+  }, duration);
+}
+
+interface ConfirmOptions {
+  title?: string;
+  message: string;
+  confirmText?: string;
+  cancelText?: string;
+  type?: "danger" | "warning" | "info";
+}
+const confirmState = ref<{
+  visible: boolean;
+  title: string;
+  message: string;
+  confirmText: string;
+  cancelText: string;
+  type: "danger" | "warning" | "info";
+  resolve: (value: boolean) => void;
+}>({
+  visible: false,
+  title: "操作确认",
+  message: "",
+  confirmText: "确定",
+  cancelText: "取消",
+  type: "info",
+  resolve: () => {}
+});
+
+function askConfirm(options: ConfirmOptions | string): Promise<boolean> {
+  const opts: ConfirmOptions = typeof options === "string" ? { message: options } : options;
+  return new Promise((resolve) => {
+    confirmState.value = {
+      visible: true,
+      title: opts.title || (opts.type === "danger" ? "高危操作确认" : "操作确认"),
+      message: opts.message,
+      confirmText: opts.confirmText || "确定",
+      cancelText: opts.cancelText || "取消",
+      type: opts.type || "info",
+      resolve: (val: boolean) => {
+        confirmState.value.visible = false;
+        resolve(val);
+      }
+    };
+  });
+}
 
 // UI Helpers
 const showPassword = ref(false);
@@ -162,14 +224,14 @@ async function toggleWindowsHello() {
     if (helloStatus.value.enrolled) {
       await invoke("disable_windows_hello");
       helloStatus.value.enrolled = false;
-      alert("已停用 Windows Hello / PIN 快速解锁");
+      notify("已停用 Windows Hello / PIN 快速免密解锁", "info");
     } else {
       await invoke("enable_windows_hello");
       helloStatus.value.enrolled = true;
-      alert("✅ Windows Hello / PIN 快速解锁已成功绑定！下次启动可直接使用指纹/面容/PIN一键解锁。");
+      notify("Windows Hello / PIN 快速解锁已成功绑定！下次可直接指纹/面容/PIN一键解锁", "success", 4000);
     }
   } catch (err: any) {
-    alert("设置 Windows Hello 失败: " + err);
+    notify("设置 Windows Hello 失败: " + err, "error");
   }
 }
 
@@ -252,10 +314,11 @@ const filteredRecords = computed(() => {
 });
 
 // Copy Helper
-async function copyText(text: string, fieldKey: string) {
+async function copyText(text: string, fieldKey: string, toastMsg = "已成功复制到剪贴板") {
   if (!text) return;
   await navigator.clipboard.writeText(text);
   copiedField.value = fieldKey;
+  notify(toastMsg, "success", 1800);
   setTimeout(() => {
     if (copiedField.value === fieldKey) copiedField.value = null;
   }, 2000);
@@ -300,21 +363,30 @@ async function handleSaveRecord() {
     selectedId.value = saved.id;
     isEditing.value = false;
     updateAllTotp();
+    notify("账号信息已成功加密保存", "success");
   } catch (err: any) {
-    alert("保存失败: " + err);
+    notify("保存失败: " + err, "error");
   }
 }
 
 async function handleDeleteRecord(id: string) {
-  if (!confirm("确定要从本地安全库中删除该账号记录吗？此操作不可逆。")) return;
+  const confirmed = await askConfirm({
+    title: "彻底删除账号记录",
+    message: "确定要从本地加密安全库中删除该账号吗？此操作不可逆。",
+    type: "danger",
+    confirmText: "确认删除",
+    cancelText: "取消"
+  });
+  if (!confirmed) return;
   try {
     await invoke("delete_record", { id });
     records.value = records.value.filter((r) => r.id !== id);
     if (selectedId.value === id) {
       selectedId.value = records.value[0]?.id || null;
     }
+    notify("账号记录已安全删除", "info");
   } catch (err: any) {
-    alert("删除失败: " + err);
+    notify("删除失败: " + err, "error");
   }
 }
 
@@ -354,7 +426,7 @@ async function openInApp(url: string) {
       url
     });
   } catch (err: any) {
-    alert("打开专属独立会话窗口失败: " + err);
+    notify("打开专属独立会话窗口失败: " + err, "error");
   } finally {
     isOpeningBrowser.value = false;
   }
@@ -420,7 +492,7 @@ async function copyAndConsumeNextBackupCode() {
   const used = new Set(usedBackupCodesSet.value);
   const next = all.find(c => !used.has(c));
   if (!next) {
-    alert("当前账号所有备用验证码已全部标记为已使用！请在 Google 安全设置中生成新代码。");
+    notify("当前账号所有备用验证码已全部标记为已使用！请在 Google 安全设置中生成新代码。", "warning");
     return;
   }
   await navigator.clipboard.writeText(next);
@@ -428,6 +500,7 @@ async function copyAndConsumeNextBackupCode() {
   selectedRecord.value.used_backup_codes = JSON.stringify(Array.from(used));
   await invoke("save_record", { record: selectedRecord.value });
   copiedField.value = "backup_code_consumed";
+  notify(`⚡ 已复制未用码 [${next}] 并自动完成核销`, "success", 3000);
   setTimeout(() => {
     if (copiedField.value === "backup_code_consumed") copiedField.value = null;
   }, 2500);
@@ -449,13 +522,22 @@ async function saveRawBackupCodes() {
   selectedRecord.value.used_backup_codes = JSON.stringify(currentUsed);
   await invoke("save_record", { record: selectedRecord.value });
   isEditingBackupCodesRaw.value = false;
+  notify(`成功更新 ${codes.length} 个备用验证码`, "success");
 }
 
 async function resetAllUsedCodes() {
   if (!selectedRecord.value) return;
-  if (!confirm("确定要重置所有备用验证码状态为「未使用」吗？")) return;
+  const confirmed = await askConfirm({
+    title: "重置备用验证码状态",
+    message: "确定要将所有备用验证码恢复为「未使用」吗？",
+    type: "warning",
+    confirmText: "确认重置",
+    cancelText: "取消"
+  });
+  if (!confirmed) return;
   selectedRecord.value.used_backup_codes = "[]";
   await invoke("save_record", { record: selectedRecord.value });
+  notify("所有备用验证码状态已全部重置为未用", "info");
 }
 
 // ==================== 2. BATCH IMPORT & SMART PARSER ====================
@@ -571,13 +653,13 @@ async function confirmBatchImport() {
     });
     records.value = await invoke<AccountRecord[]>("get_records");
     showBatchImportModal.value = false;
-    alert(`成功批量导入/更新了 ${count} 个账号！`);
+    notify(`🎉 成功批量导入/合并了 ${count} 个账号记录！`, "success", 4000);
     if (!selectedId.value && records.value.length > 0) {
       selectedId.value = records.value[0].id;
     }
     updateAllTotp();
   } catch (err: any) {
-    alert("批量导入失败: " + err);
+    notify("批量导入失败: " + err, "error");
   }
 }
 
@@ -642,7 +724,14 @@ async function handleUploadWebDav() {
 }
 
 async function handleDownloadWebDav() {
-  if (!confirm("从云端恢复将覆盖本地现有库（自动先创建本地快照备份）。确定继续吗？")) return;
+  const confirmed = await askConfirm({
+    title: "云端恢复确认",
+    message: "从云端下载将覆盖本地现有保险库（系统会自动先为当前本地数据创建安全快照备份）。确定继续吗？",
+    type: "warning",
+    confirmText: "确认恢复覆盖",
+    cancelText: "取消"
+  });
+  if (!confirmed) return;
   isWebDavSyncing.value = true;
   webdavStatus.value = "正在下载并解密验证云端保险库...";
   try {
@@ -652,8 +741,10 @@ async function handleDownloadWebDav() {
     if (remote.length > 0) selectedId.value = remote[0].id;
     updateAllTotp();
     webdavStatus.value = `✅ 云端恢复成功！共同步载入 ${remote.length} 个账号。`;
+    notify(`云端恢复成功！已同步载入 ${remote.length} 个账号`, "success");
   } catch (err: any) {
     webdavStatus.value = "❌ 恢复失败: " + err;
+    notify("云端恢复失败: " + err, "error");
   } finally {
     isWebDavSyncing.value = false;
   }
@@ -683,16 +774,23 @@ async function loadBackupsList() {
 }
 
 async function handleRestoreBackup(filename: string) {
-  if (!confirm(`确定要回滚到历史版本 [${filename}] 吗？当前数据将先自动创建新的回退快照。`)) return;
+  const confirmed = await askConfirm({
+    title: "回滚历史快照",
+    message: `确定要回滚到历史版本 [${filename}] 吗？当前最新数据将自动创建新的安全快照备份。`,
+    type: "warning",
+    confirmText: "确认回滚",
+    cancelText: "取消"
+  });
+  if (!confirmed) return;
   try {
     const restored = await invoke<AccountRecord[]>("restore_vault_backup", { filename });
     records.value = restored;
     if (restored.length > 0) selectedId.value = restored[0].id;
     updateAllTotp();
     await loadBackupsList();
-    alert(`成功回滚到历史版本！已载入 ${restored.length} 个账号记录。`);
+    notify(`🎉 成功回滚到历史版本！已载入 ${restored.length} 个账号记录。`, "success", 4000);
   } catch (err: any) {
-    alert("回滚失败: " + err);
+    notify("回滚失败: " + err, "error");
   }
 }
 
@@ -706,8 +804,9 @@ async function handleExportCsv() {
     link.download = `GoogleAccountVault_Export_${new Date().toISOString().slice(0, 10)}.csv`;
     link.click();
     URL.revokeObjectURL(url);
+    notify("CSV 表格已成功导出并保存", "success");
   } catch (err: any) {
-    alert("导出失败: " + err);
+    notify("导出失败: " + err, "error");
   }
 }
 
@@ -721,8 +820,9 @@ function handleExportJson() {
     link.download = `GoogleAccountVault_Export_${new Date().toISOString().slice(0, 10)}.json`;
     link.click();
     URL.revokeObjectURL(url);
+    notify("JSON 数据已成功导出并保存", "success");
   } catch (err: any) {
-    alert("导出失败: " + err);
+    notify("导出失败: " + err, "error");
   }
 }
 </script>
@@ -1899,6 +1999,84 @@ function handleExportJson() {
               <span>导出 JSON 数据文件</span>
             </button>
           </div>
+        </div>
+      </div>
+    </div>
+
+
+    <!-- 9. FLOATING TOAST NOTIFICATION SYSTEM -->
+    <div class="fixed top-6 left-1/2 -translate-x-1/2 z-[9999] pointer-events-none flex flex-col gap-2.5 items-center max-w-lg w-full px-4">
+      <transition-group
+        enter-active-class="transition duration-200 ease-out"
+        enter-from-class="transform -translate-y-4 opacity-0 scale-95"
+        enter-to-class="transform translate-y-0 opacity-100 scale-100"
+        leave-active-class="transition duration-150 ease-in"
+        leave-from-class="transform translate-y-0 opacity-100 scale-100"
+        leave-to-class="transform -translate-y-2 opacity-0 scale-95"
+      >
+        <div
+          v-for="toast in toasts"
+          :key="toast.id"
+          class="pointer-events-auto px-4 py-2.5 rounded-2xl shadow-xl border text-xs font-semibold flex items-center gap-2.5 backdrop-blur-xl transition-all select-text"
+          :class="{
+            'bg-emerald-50/95 text-emerald-900 border-emerald-300/80 shadow-emerald-500/10': toast.type === 'success',
+            'bg-red-50/95 text-red-900 border-red-300/80 shadow-red-500/10': toast.type === 'error',
+            'bg-amber-50/95 text-amber-900 border-amber-300/80 shadow-amber-500/10': toast.type === 'warning',
+            'bg-slate-900/90 text-white border-slate-700/60 shadow-black/25': toast.type === 'info'
+          }"
+        >
+          <CheckCircle2 v-if="toast.type === 'success'" class="w-4 h-4 text-emerald-600 flex-shrink-0" />
+          <AlertCircle v-else-if="toast.type === 'error'" class="w-4 h-4 text-red-600 flex-shrink-0" />
+          <AlertTriangle v-else-if="toast.type === 'warning'" class="w-4 h-4 text-amber-600 flex-shrink-0" />
+          <Info v-else class="w-4 h-4 text-blue-400 flex-shrink-0" />
+          <span class="leading-normal">{{ toast.message }}</span>
+        </div>
+      </transition-group>
+    </div>
+
+    <!-- 10. CUSTOM CONFIRMATION MODAL -->
+    <div
+      v-if="confirmState.visible"
+      class="fixed inset-0 z-[9998] flex items-center justify-center p-4 bg-black/45 backdrop-blur-sm"
+    >
+      <div class="w-full max-w-sm bg-white rounded-3xl p-6 shadow-2xl border border-[#dadce0] flex flex-col gap-4 transform transition-all animate-in fade-in zoom-in-95 duration-150">
+        <div class="flex items-start gap-3.5">
+          <div
+            class="w-10 h-10 rounded-2xl flex items-center justify-center flex-shrink-0"
+            :class="{
+              'bg-red-100 text-red-600': confirmState.type === 'danger',
+              'bg-amber-100 text-amber-700': confirmState.type === 'warning',
+              'bg-[#e8f0fe] text-[#1a73e8]': confirmState.type === 'info'
+            }"
+          >
+            <AlertTriangle v-if="confirmState.type === 'warning'" class="w-5 h-5" />
+            <Trash2 v-else-if="confirmState.type === 'danger'" class="w-5 h-5" />
+            <Info v-else class="w-5 h-5" />
+          </div>
+          <div class="flex-1">
+            <h3 class="text-sm font-bold text-[#202124]">{{ confirmState.title }}</h3>
+            <p class="text-xs text-[#5f6368] mt-1.5 leading-relaxed">{{ confirmState.message }}</p>
+          </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-2.5 mt-2 pt-2 border-t border-[#f1f3f4]">
+          <button
+            @click="confirmState.resolve(false)"
+            class="px-4 py-2 bg-[#f1f3f4] hover:bg-[#e8eaed] active:bg-[#dadce0] text-[#3c4043] rounded-xl text-xs font-medium transition-colors"
+          >
+            {{ confirmState.cancelText }}
+          </button>
+          <button
+            @click="confirmState.resolve(true)"
+            class="px-4 py-2 text-white rounded-xl text-xs font-medium transition-colors shadow-sm"
+            :class="{
+              'bg-red-600 hover:bg-red-700 active:bg-red-800': confirmState.type === 'danger',
+              'bg-amber-600 hover:bg-amber-700 active:bg-amber-800': confirmState.type === 'warning',
+              'bg-[#1a73e8] hover:bg-[#1557b0] active:bg-[#174ea6]': confirmState.type === 'info'
+            }"
+          >
+            {{ confirmState.confirmText }}
+          </button>
         </div>
       </div>
     </div>
