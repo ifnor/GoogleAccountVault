@@ -27,3 +27,7 @@ dist-ssr
 src-tauri/target/
 target/
 *.exe
+*.apk
+src-tauri/gen/android/.gradle/
+src-tauri/gen/android/**/build/
+src-tauri/gen/android/**/.cxx/

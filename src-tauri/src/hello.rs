@@ -1,116 +1,163 @@
 use std::fs;
 use std::path::PathBuf;
-use std::ptr::null_mut;
 use crate::vault;
-
-#[repr(C)]
-struct DATA_BLOB {
-    cb_data: u32,
-    pb_data: *mut u8,
-}
-
-#[link(name = "crypt32")]
-unsafe extern "system" {
-    fn CryptProtectData(
-        pDataIn: *const DATA_BLOB,
-        szDataDescr: *const u16,
-        pOptionalEntropy: *const DATA_BLOB,
-        pvReserved: *mut std::ffi::c_void,
-        pPromptStruct: *mut std::ffi::c_void,
-        dwFlags: u32,
-        pDataOut: *mut DATA_BLOB,
-    ) -> i32;
-
-    fn CryptUnprotectData(
-        pDataIn: *const DATA_BLOB,
-        ppszDataDescr: *mut *mut u16,
-        pOptionalEntropy: *const DATA_BLOB,
-        pvReserved: *mut std::ffi::c_void,
-        pPromptStruct: *mut std::ffi::c_void,
-        dwFlags: u32,
-        pDataOut: *mut DATA_BLOB,
-    ) -> i32;
-}
-
-#[link(name = "kernel32")]
-unsafe extern "system" {
-    fn LocalFree(hMem: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
-}
-
-const CRYPTPROTECT_UI_FORBIDDEN: u32 = 0x1;
-
-pub fn dpapi_protect(data: &[u8]) -> Result<Vec<u8>, String> {
-    let mut in_blob = DATA_BLOB {
-        cb_data: data.len() as u32,
-        pb_data: data.as_ptr() as *mut u8,
-    };
-    let mut out_blob = DATA_BLOB {
-        cb_data: 0,
-        pb_data: null_mut(),
-    };
-
-    let success = unsafe {
-        CryptProtectData(
-            &mut in_blob,
-            null_mut(),
-            null_mut(),
-            null_mut(),
-            null_mut(),
-            CRYPTPROTECT_UI_FORBIDDEN,
-            &mut out_blob,
-        )
-    };
-
-    if success == 0 {
-        return Err("DPAPI 加密失败".to_string());
-    }
-
-    let mut result = vec![0u8; out_blob.cb_data as usize];
-    unsafe {
-        std::ptr::copy_nonoverlapping(out_blob.pb_data, result.as_mut_ptr(), out_blob.cb_data as usize);
-        LocalFree(out_blob.pb_data as *mut std::ffi::c_void);
-    }
-
-    Ok(result)
-}
-
-pub fn dpapi_unprotect(data: &[u8]) -> Result<Vec<u8>, String> {
-    let mut in_blob = DATA_BLOB {
-        cb_data: data.len() as u32,
-        pb_data: data.as_ptr() as *mut u8,
-    };
-    let mut out_blob = DATA_BLOB {
-        cb_data: 0,
-        pb_data: null_mut(),
-    };
-
-    let success = unsafe {
-        CryptUnprotectData(
-            &mut in_blob,
-            null_mut(),
-            null_mut(),
-            null_mut(),
-            null_mut(),
-            CRYPTPROTECT_UI_FORBIDDEN,
-            &mut out_blob,
-        )
-    };
-
-    if success == 0 {
-        return Err("DPAPI 解密失败 (可能当前非授权 Windows 用户或凭证已失效)".to_string());
-    }
-
-    let mut result = vec![0u8; out_blob.cb_data as usize];
-    unsafe {
-        std::ptr::copy_nonoverlapping(out_blob.pb_data, result.as_mut_ptr(), out_blob.cb_data as usize);
-        LocalFree(out_blob.pb_data as *mut std::ffi::c_void);
-    }
-
-    Ok(result)
-}
 
 fn hello_cred_path() -> PathBuf {
     vault::vault_data_dir().join("hello.bin")
+}
+
+#[cfg(target_os = "windows")]
+mod windows_impl {
+    use std::ptr::null_mut;
+    use windows::core::{factory, HSTRING};
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::System::WinRT::IUserConsentVerifierInterop;
+    use windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
+    use windows::Security::Credentials::UI::{UserConsentVerificationResult, UserConsentVerifier, UserConsentVerifierAvailability};
+    use windows_future::IAsyncOperation;
+
+    #[repr(C)]
+    struct DATA_BLOB {
+        cb_data: u32,
+        pb_data: *mut u8,
+    }
+
+    #[link(name = "crypt32")]
+    unsafe extern "system" {
+        fn CryptProtectData(
+            pDataIn: *const DATA_BLOB,
+            szDataDescr: *const u16,
+            pOptionalEntropy: *const DATA_BLOB,
+            pvReserved: *mut std::ffi::c_void,
+            pPromptStruct: *mut std::ffi::c_void,
+            dwFlags: u32,
+            pDataOut: *mut DATA_BLOB,
+        ) -> i32;
+
+        fn CryptUnprotectData(
+            pDataIn: *const DATA_BLOB,
+            ppszDataDescr: *mut *mut u16,
+            pOptionalEntropy: *const DATA_BLOB,
+            pvReserved: *mut std::ffi::c_void,
+            pPromptStruct: *mut std::ffi::c_void,
+            dwFlags: u32,
+            pDataOut: *mut DATA_BLOB,
+        ) -> i32;
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn LocalFree(hMem: *mut std::ffi::c_void) -> *mut std::ffi::c_void;
+    }
+
+    const CRYPTPROTECT_UI_FORBIDDEN: u32 = 0x1;
+
+    pub fn dpapi_protect(data: &[u8]) -> Result<Vec<u8>, String> {
+        let mut in_blob = DATA_BLOB {
+            cb_data: data.len() as u32,
+            pb_data: data.as_ptr() as *mut u8,
+        };
+        let mut out_blob = DATA_BLOB {
+            cb_data: 0,
+            pb_data: null_mut(),
+        };
+
+        let success = unsafe {
+            CryptProtectData(
+                &mut in_blob,
+                null_mut(),
+                null_mut(),
+                null_mut(),
+                null_mut(),
+                CRYPTPROTECT_UI_FORBIDDEN,
+                &mut out_blob,
+            )
+        };
+
+        if success == 0 {
+            return Err("DPAPI 加密失败".to_string());
+        }
+
+        let mut result = vec![0u8; out_blob.cb_data as usize];
+        unsafe {
+            std::ptr::copy_nonoverlapping(out_blob.pb_data, result.as_mut_ptr(), out_blob.cb_data as usize);
+            LocalFree(out_blob.pb_data as *mut std::ffi::c_void);
+        }
+
+        Ok(result)
+    }
+
+    pub fn dpapi_unprotect(data: &[u8]) -> Result<Vec<u8>, String> {
+        let mut in_blob = DATA_BLOB {
+            cb_data: data.len() as u32,
+            pb_data: data.as_ptr() as *mut u8,
+        };
+        let mut out_blob = DATA_BLOB {
+            cb_data: 0,
+            pb_data: null_mut(),
+        };
+
+        let success = unsafe {
+            CryptUnprotectData(
+                &mut in_blob,
+                null_mut(),
+                null_mut(),
+                null_mut(),
+                null_mut(),
+                CRYPTPROTECT_UI_FORBIDDEN,
+                &mut out_blob,
+            )
+        };
+
+        if success == 0 {
+            return Err("DPAPI 解密失败 (可能当前非授权 Windows 用户或凭证已失效)".to_string());
+        }
+
+        let mut result = vec![0u8; out_blob.cb_data as usize];
+        unsafe {
+            std::ptr::copy_nonoverlapping(out_blob.pb_data, result.as_mut_ptr(), out_blob.cb_data as usize);
+            LocalFree(out_blob.pb_data as *mut std::ffi::c_void);
+        }
+
+        Ok(result)
+    }
+
+    pub async fn check_hello_availability() -> Result<bool, String> {
+        let op = UserConsentVerifier::CheckAvailabilityAsync()
+            .map_err(|e| format!("检查 Windows Hello 可用性失败: {e}"))?;
+        let status = op.await.map_err(|e| format!("获取状态失败: {e}"))?;
+        Ok(status == UserConsentVerifierAvailability::Available)
+    }
+
+    pub async fn verify_user_consent(prompt: &str, raw_hwnd: Option<isize>) -> Result<bool, String> {
+        let prompt_h = HSTRING::from(prompt);
+
+        if let Some(h_val) = raw_hwnd {
+            let hwnd = HWND(h_val as *mut std::ffi::c_void);
+            unsafe {
+                let _ = SetForegroundWindow(hwnd);
+            }
+
+            let maybe_op = if let Ok(interop) = factory::<UserConsentVerifier, IUserConsentVerifierInterop>() {
+                let async_op: windows::core::Result<IAsyncOperation<UserConsentVerificationResult>> = unsafe {
+                    interop.RequestVerificationForWindowAsync(hwnd, &prompt_h)
+                };
+                async_op.ok()
+            } else {
+                None
+            };
+
+            if let Some(op) = maybe_op {
+                let result = op.await.map_err(|e| format!("验证执行失败: {e}"))?;
+                return Ok(result == UserConsentVerificationResult::Verified);
+            }
+        }
+
+        let op = UserConsentVerifier::RequestVerificationAsync(&prompt_h)
+            .map_err(|e| format!("请求 Windows Hello 验证失败: {e}"))?;
+        let result = op.await.map_err(|e| format!("验证执行失败: {e}"))?;
+        Ok(result == UserConsentVerificationResult::Verified)
+    }
 }
 
 pub fn is_hello_enrolled() -> bool {
@@ -125,8 +172,9 @@ pub fn disable_hello() -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(target_os = "windows")]
 pub fn save_hello_credentials(master_password: &str) -> Result<(), String> {
-    let encrypted = dpapi_protect(master_password.as_bytes())?;
+    let encrypted = windows_impl::dpapi_protect(master_password.as_bytes())?;
     let path = hello_cred_path();
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
@@ -135,56 +183,43 @@ pub fn save_hello_credentials(master_password: &str) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(not(target_os = "windows"))]
+pub fn save_hello_credentials(_master_password: &str) -> Result<(), String> {
+    Err("当前平台不支持 Windows Hello".to_string())
+}
+
+#[cfg(target_os = "windows")]
 pub fn get_hello_credentials() -> Result<String, String> {
     let path = hello_cred_path();
     if !path.exists() {
         return Err("尚未启用 Windows Hello 解锁".to_string());
     }
     let data = fs::read(path).map_err(|e| format!("读取凭据失败: {e}"))?;
-    let decrypted = dpapi_unprotect(&data)?;
+    let decrypted = windows_impl::dpapi_unprotect(&data)?;
     String::from_utf8(decrypted).map_err(|e| format!("解析凭据失败: {e}"))
 }
 
-use windows::core::{factory, HSTRING};
-use windows::Win32::Foundation::HWND;
-use windows::Win32::System::WinRT::IUserConsentVerifierInterop;
-use windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
-use windows::Security::Credentials::UI::{UserConsentVerificationResult, UserConsentVerifier, UserConsentVerifierAvailability};
-use windows_future::IAsyncOperation;
-
-pub async fn check_hello_availability() -> Result<bool, String> {
-    let op = UserConsentVerifier::CheckAvailabilityAsync()
-        .map_err(|e| format!("检查 Windows Hello 可用性失败: {e}"))?;
-    let status = op.await.map_err(|e| format!("获取状态失败: {e}"))?;
-    Ok(status == UserConsentVerifierAvailability::Available)
+#[cfg(not(target_os = "windows"))]
+pub fn get_hello_credentials() -> Result<String, String> {
+    Err("当前平台不支持 Windows Hello".to_string())
 }
 
+#[cfg(target_os = "windows")]
+pub async fn check_hello_availability() -> Result<bool, String> {
+    windows_impl::check_hello_availability().await
+}
+
+#[cfg(not(target_os = "windows"))]
+pub async fn check_hello_availability() -> Result<bool, String> {
+    Ok(false)
+}
+
+#[cfg(target_os = "windows")]
 pub async fn verify_user_consent(prompt: &str, raw_hwnd: Option<isize>) -> Result<bool, String> {
-    let prompt_h = HSTRING::from(prompt);
+    windows_impl::verify_user_consent(prompt, raw_hwnd).await
+}
 
-    if let Some(h_val) = raw_hwnd {
-        let hwnd = HWND(h_val as *mut std::ffi::c_void);
-        unsafe {
-            let _ = SetForegroundWindow(hwnd);
-        }
-
-        let maybe_op = if let Ok(interop) = factory::<UserConsentVerifier, IUserConsentVerifierInterop>() {
-            let async_op: windows::core::Result<IAsyncOperation<UserConsentVerificationResult>> = unsafe {
-                interop.RequestVerificationForWindowAsync(hwnd, &prompt_h)
-            };
-            async_op.ok()
-        } else {
-            None
-        };
-
-        if let Some(op) = maybe_op {
-            let result = op.await.map_err(|e| format!("验证执行失败: {e}"))?;
-            return Ok(result == UserConsentVerificationResult::Verified);
-        }
-    }
-
-    let op = UserConsentVerifier::RequestVerificationAsync(&prompt_h)
-        .map_err(|e| format!("请求 Windows Hello 验证失败: {e}"))?;
-    let result = op.await.map_err(|e| format!("验证执行失败: {e}"))?;
-    Ok(result == UserConsentVerificationResult::Verified)
+#[cfg(not(target_os = "windows"))]
+pub async fn verify_user_consent(_prompt: &str, _raw_hwnd: Option<isize>) -> Result<bool, String> {
+    Err("当前平台不支持生物识别验证".to_string())
 }

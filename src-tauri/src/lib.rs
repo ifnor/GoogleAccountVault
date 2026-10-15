@@ -42,7 +42,10 @@ async fn enable_windows_hello(window: tauri::WebviewWindow, state: State<'_, App
     };
     let _ = window.show();
     let _ = window.set_focus();
+    #[cfg(target_os = "windows")]
     let raw_hwnd = window.hwnd().ok().map(|h| h.0 as isize);
+    #[cfg(not(target_os = "windows"))]
+    let raw_hwnd: Option<isize> = None;
     let verified = hello::verify_user_consent("验证身份以启用 Windows Hello / PIN 快速解锁", raw_hwnd).await?;
     if !verified {
         return Err("身份验证未通过或已取消".to_string());
@@ -60,7 +63,10 @@ fn disable_windows_hello() -> Result<(), String> {
 async fn unlock_vault_with_hello(window: tauri::WebviewWindow, state: State<'_, AppState>) -> Result<Vec<AccountRecord>, String> {
     let _ = window.show();
     let _ = window.set_focus();
+    #[cfg(target_os = "windows")]
     let raw_hwnd = window.hwnd().ok().map(|h| h.0 as isize);
+    #[cfg(not(target_os = "windows"))]
+    let raw_hwnd: Option<isize> = None;
     let verified = hello::verify_user_consent("验证 Windows Hello / PIN 身份以解锁 Google 账号管家", raw_hwnd).await?;
     if !verified {
         return Err("身份验证未通过或已取消".to_string());
@@ -266,7 +272,7 @@ fn batch_import_records(new_records: Vec<AccountRecord>, state: State<'_, AppSta
 
 #[tauri::command]
 async fn open_in_app_browser(
-    app: tauri::AppHandle,
+    _app: tauri::AppHandle,
     email: String,
     password: Option<String>,
     totp_secret: Option<String>,
@@ -279,7 +285,7 @@ async fn open_in_app_browser(
     let parsed_url = tauri::Url::parse(&url).map_err(|e| format!("无效网址: {e}"))?;
 
     let safe_email_json = serde_json::to_string(&email).unwrap_or_else(|_| "\"\"".to_string());
-    let safe_pwd_json = serde_json::to_string(&password.unwrap_or_default()).unwrap_or_else(|_| "\"\"".to_string());
+    let safe_pwd_json = serde_json::to_string(&password.as_deref().unwrap_or_default()).unwrap_or_else(|_| "\"\"".to_string());
     let current_totp = totp_secret
         .as_ref()
         .and_then(|s| totp::calculate_totp(s).ok())
@@ -364,32 +370,44 @@ async fn open_in_app_browser(
         "#
     );
 
-    // If window already exists, focus it and navigate to the requested URL
-    if let Some(w) = app.get_webview_window(&safe_label) {
-        let _ = w.show();
-        let _ = w.set_focus();
-        let _ = w.navigate(parsed_url);
-        let _ = w.eval(&autofill_script);
-        return Ok(());
+    #[cfg(target_os = "android")]
+    {
+        let _ = (email, password, totp_secret, safe_label, safe_email_json, safe_pwd_json, current_totp, safe_totp_json, autofill_script);
+        tauri_plugin_opener::open_url(parsed_url.as_str(), None::<&str>)
+            .map_err(|e| format!("调用系统浏览器失败: {e}"))?;
+        Ok(())
     }
 
-    let session_dir = vault::vault_data_dir().join("sessions").join(&safe_label);
-    let _ = std::fs::create_dir_all(&session_dir);
-    let ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0";
+    #[cfg(not(target_os = "android"))]
+    {
+        let app = &_app;
+        // If window already exists, focus it and navigate to the requested URL
+        if let Some(w) = app.get_webview_window(&safe_label) {
+            let _ = w.show();
+            let _ = w.set_focus();
+            let _ = w.navigate(parsed_url);
+            let _ = w.eval(&autofill_script);
+            return Ok(());
+        }
 
-    let builder = tauri::WebviewWindowBuilder::new(&app, &safe_label, tauri::WebviewUrl::External(parsed_url))
-        .title(format!("Google 独立会话 - {}", email))
-        .inner_size(1050.0, 750.0)
-        .center()
-        .user_agent(ua)
-        .devtools(true)
-        .initialization_script(&autofill_script)
-        .data_directory(session_dir);
+        let session_dir = vault::vault_data_dir().join("sessions").join(&safe_label);
+        let _ = std::fs::create_dir_all(&session_dir);
+        let ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0";
 
-    let _window = builder.build().map_err(|e| format!("创建独立窗口失败: {e}"))?;
-    #[cfg(debug_assertions)]
-    let _ = _window.open_devtools();
-    Ok(())
+        let builder = tauri::WebviewWindowBuilder::new(&app, &safe_label, tauri::WebviewUrl::External(parsed_url))
+            .title(format!("Google 独立会话 - {}", email))
+            .inner_size(1050.0, 750.0)
+            .center()
+            .user_agent(ua)
+            .devtools(true)
+            .initialization_script(&autofill_script)
+            .data_directory(session_dir);
+
+        let _window = builder.build().map_err(|e| format!("创建独立窗口失败: {e}"))?;
+        #[cfg(debug_assertions)]
+        let _ = _window.open_devtools();
+        Ok(())
+    }
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
