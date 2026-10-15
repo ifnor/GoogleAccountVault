@@ -161,6 +161,11 @@ fn generate_pwd(length: usize, symbols: bool) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn generate_custom_pwd(options: utils::PasswordGenOptions) -> Result<String, String> {
+    utils::generate_custom_password(options)
+}
+
+#[tauri::command]
 async fn test_webdav_connection(config: webdav::WebDavConfig) -> Result<String, String> {
     webdav::test_connection(&config).await
 }
@@ -423,7 +428,8 @@ pub fn run() {
             check_windows_hello_status,
             enable_windows_hello,
             disable_windows_hello,
-            unlock_vault_with_hello
+            unlock_vault_with_hello,
+            generate_custom_pwd
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
