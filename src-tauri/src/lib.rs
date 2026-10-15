@@ -392,6 +392,101 @@ async fn open_in_app_browser(
     Ok(())
 }
 
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+pub struct UpdateInfo {
+    pub current_version: String,
+    pub latest_version: String,
+    pub has_update: bool,
+    pub release_name: String,
+    pub release_notes: String,
+    pub published_at: String,
+    pub release_url: String,
+    pub download_url: Option<String>,
+}
+
+fn parse_semver(v: &str) -> (u32, u32, u32) {
+    let clean = v.trim().trim_start_matches(|c| c == 'v' || c == 'V');
+    let parts: Vec<&str> = clean.split('.').collect();
+    let major = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
+    let minor = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let patch = parts.get(2).and_then(|s| s.split('-').next().unwrap_or("0").parse().ok()).unwrap_or(0);
+    (major, minor, patch)
+}
+
+#[tauri::command]
+async fn check_github_update(repo: Option<String>) -> Result<UpdateInfo, String> {
+    let target_repo = repo.unwrap_or_else(|| "ifnor/GoogleAccountVault".to_string());
+    let url = format!("https://api.github.com/repos/{}/releases/latest", target_repo.trim());
+
+    let client = reqwest::Client::builder()
+        .user_agent("google-account-vault/3.0.0")
+        .timeout(std::time::Duration::from_secs(8))
+        .build()
+        .map_err(|e| format!("构建 HTTP 客户端失败: {e}"))?;
+
+    let resp = client.get(&url).send().await.map_err(|e| {
+        format!("请求 GitHub Releases 失败: {e}")
+    })?;
+
+    if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(UpdateInfo {
+            current_version: "3.0.0".to_string(),
+            latest_version: "3.0.0".to_string(),
+            has_update: false,
+            release_name: "暂无发布版本".to_string(),
+            release_notes: format!("仓库 {} 尚未发布任何公开 Release", target_repo),
+            published_at: String::new(),
+            release_url: format!("https://github.com/{}", target_repo),
+            download_url: None,
+        });
+    }
+
+    if !resp.status().is_success() {
+        return Err(format!("GitHub API 响应异常: HTTP {}", resp.status()));
+    }
+
+    let body = resp.text().await.map_err(|e| format!("读取 GitHub 响应文本失败: {e}"))?;
+    let json: serde_json::Value = serde_json::from_str(&body).map_err(|e| format!("解析 Release JSON 失败: {e}"))?;
+
+    let tag = json["tag_name"].as_str().unwrap_or("3.0.0").to_string();
+    let name = json["name"].as_str().unwrap_or(&tag).to_string();
+    let notes = json["body"].as_str().unwrap_or("").to_string();
+    let published_at = json["published_at"].as_str().unwrap_or("").to_string();
+    let html_url = json["html_url"].as_str().unwrap_or(&format!("https://github.com/{}/releases", target_repo)).to_string();
+
+    let mut download_url = None;
+    if let Some(assets) = json["assets"].as_array() {
+        for asset in assets {
+            if let Some(asset_name) = asset["name"].as_str() {
+                if asset_name.ends_with(".exe") {
+                    download_url = asset["browser_download_url"].as_str().map(|s| s.to_string());
+                    break;
+                }
+            }
+        }
+    }
+
+    let current = (3, 0, 0);
+    let latest = parse_semver(&tag);
+    let has_update = latest > current;
+
+    Ok(UpdateInfo {
+        current_version: "3.0.0".to_string(),
+        latest_version: tag,
+        has_update,
+        release_name: name,
+        release_notes: notes,
+        published_at,
+        release_url: html_url,
+        download_url,
+    })
+}
+
+#[tauri::command]
+fn open_external_url(url: String) -> Result<(), String> {
+    tauri_plugin_opener::open_url(url, None::<&str>).map_err(|e| format!("打开系统浏览器链接失败: {e}"))
+}
+
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -435,7 +530,9 @@ pub fn run() {
             enable_windows_hello,
             disable_windows_hello,
             unlock_vault_with_hello,
-            generate_custom_pwd
+            generate_custom_pwd,
+            check_github_update,
+            open_external_url
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

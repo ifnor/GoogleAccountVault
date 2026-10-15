@@ -32,6 +32,7 @@ import {
   RefreshCw,
   FileText,
   Fingerprint,
+  Settings,
   X
 } from "lucide-vue-next";
 
@@ -663,26 +664,76 @@ async function confirmBatchImport() {
 }
 
 // ==================== 3. WEBDAV CLOUD SYNC ====================
-const showWebDavModal = ref(false);
 const webdavForm = ref({ url: "", username: "", password: "" });
 const webdavStatus = ref("");
 const isWebDavSyncing = ref(false);
 
-async function openWebDavModal() {
-  try {
-    const saved = await invoke<any>("load_webdav_config");
-    if (saved) {
-      webdavForm.value = {
-        url: saved.url || "",
-        username: saved.username || "",
-        password: saved.password || ""
-      };
-    }
-  } catch (e) {
-    // ignore
-  }
+// ==================== SETTINGS & GITHUB UPDATE ====================
+const showSettingsModal = ref(false);
+const settingsTab = ref<"security" | "webdav" | "backups" | "updates" | "about">("security");
+
+interface UpdateInfo {
+  current_version: string;
+  latest_version: string;
+  has_update: boolean;
+  release_name: string;
+  release_notes: string;
+  published_at: string;
+  release_url: string;
+  download_url: string | null;
+}
+const customRepo = ref("ifnor/GoogleAccountVault");
+const isCheckingUpdate = ref(false);
+const updateResult = ref<UpdateInfo | null>(null);
+const updateError = ref("");
+
+async function openSettingsModal(tab: "security" | "webdav" | "backups" | "updates" | "about" = "security") {
+  settingsTab.value = tab;
+  showSettingsModal.value = true;
   webdavStatus.value = "";
-  showWebDavModal.value = true;
+  if (tab === "webdav") {
+    try {
+      const saved = await invoke<any>("load_webdav_config");
+      if (saved) {
+        webdavForm.value = {
+          url: saved.url || "",
+          username: saved.username || "",
+          password: saved.password || ""
+        };
+      }
+    } catch (e) {}
+  }
+  if (tab === "backups") {
+    await loadBackupsList();
+  }
+}
+
+async function checkForUpdates() {
+  isCheckingUpdate.value = true;
+  updateError.value = "";
+  updateResult.value = null;
+  try {
+    const res = await invoke<UpdateInfo>("check_github_update", { repo: customRepo.value.trim() || undefined });
+    updateResult.value = res;
+    if (res.has_update) {
+      notify(`✨ 发现新版本 ${res.latest_version}！可在设置中查看更新`, "info", 5000);
+    } else {
+      notify(`当前已是最新版本 (${res.current_version})`, "success", 3000);
+    }
+  } catch (err: any) {
+    updateError.value = typeof err === "string" ? err : (err?.message || "检查更新失败");
+    notify("检查更新失败: " + updateError.value, "error");
+  } finally {
+    isCheckingUpdate.value = false;
+  }
+}
+
+async function openExternalUrl(url: string) {
+  try {
+    await invoke("open_external_url", { url });
+  } catch (e) {
+    window.open(url, "_blank");
+  }
 }
 
 async function handleTestWebDav() {
@@ -750,16 +801,9 @@ async function handleDownloadWebDav() {
 }
 
 // ==================== 4. BACKUPS & EXPORT ====================
-const showBackupsModal = ref(false);
 const backupTab = ref<"backups" | "export">("backups");
 const backupList = ref<Array<{ filename: string; timestamp: string; size_bytes: number }>>([]);
 const isLoadingBackups = ref(false);
-
-async function openBackupsModal() {
-  backupTab.value = "backups";
-  showBackupsModal.value = true;
-  await loadBackupsList();
-}
 
 async function loadBackupsList() {
   isLoadingBackups.value = true;
@@ -1036,33 +1080,15 @@ const passwordStrength = computed(() => {
             <span>批量导入</span>
           </button>
 
+          <!-- Unified Settings Button -->
           <button
-            @click="openWebDavModal"
-            class="h-9 px-3 bg-[#f1f3f4] hover:bg-[#e8eaed] text-[#3c4043] rounded-full text-xs font-medium flex items-center gap-1.5 transition-all"
-            title="WebDAV 云端端到端加密同步"
+            @click="openSettingsModal('security')"
+            class="h-9 px-3.5 bg-[#f1f3f4] hover:bg-[#e8eaed] text-[#3c4043] rounded-full text-xs font-medium flex items-center gap-1.5 transition-all relative"
+            title="设置与偏好 (Windows Hello、云端同步、备份导出、检查更新)"
           >
-            <Cloud class="w-3.5 h-3.5 text-[#1a73e8]" />
-            <span>云端同步</span>
-          </button>
-
-          <button
-            @click="openBackupsModal"
-            class="h-9 px-3 bg-[#f1f3f4] hover:bg-[#e8eaed] text-[#3c4043] rounded-full text-xs font-medium flex items-center gap-1.5 transition-all"
-            title="历史版本回滚与数据导出"
-          >
-            <History class="w-3.5 h-3.5 text-[#1a73e8]" />
-            <span>备份与导出</span>
-          </button>
-
-          <button
-            v-if="helloStatus.available"
-            @click="toggleWindowsHello"
-            class="h-9 px-3 rounded-full text-xs font-medium flex items-center gap-1.5 transition-all"
-            :class="helloStatus.enrolled ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200' : 'bg-[#f1f3f4] hover:bg-[#e8eaed] text-[#3c4043]'"
-            :title="helloStatus.enrolled ? '已启用 Windows Hello / PIN 快速解锁 (点击可停用)' : '点击绑定启用 Windows Hello / PIN 快速免密解锁'"
-          >
-            <Fingerprint class="w-3.5 h-3.5" :class="helloStatus.enrolled ? 'text-emerald-600' : 'text-[#1a73e8]'" />
-            <span>{{ helloStatus.enrolled ? "Windows Hello: 已开启" : "开启 Windows Hello" }}</span>
+            <Settings class="w-3.5 h-3.5 text-[#1a73e8]" />
+            <span>设置</span>
+            <span v-if="helloStatus.enrolled" class="w-1.5 h-1.5 rounded-full bg-emerald-500 absolute top-2 right-2" title="Windows Hello 已开启"></span>
           </button>
 
           <button
@@ -1874,212 +1900,519 @@ const passwordStrength = computed(() => {
       </div>
     </div>
 
-    <!-- 7. WEBDAV CLOUD SYNC MODAL -->
+    <!-- 7. UNIFIED SETTINGS MODAL -->
     <div
-      v-if="showWebDavModal"
-      class="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+      v-if="showSettingsModal"
+      class="fixed inset-0 bg-black/45 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in"
     >
-      <div class="w-full max-w-md bg-white rounded-3xl p-6 shadow-xl border border-[#dadce0] flex flex-col">
-        <div class="flex items-center justify-between pb-3 border-b border-[#f1f3f4] mb-4">
-          <div class="flex items-center gap-2">
-            <div class="w-7 h-7 rounded-lg bg-[#e8f0fe] flex items-center justify-center text-[#1a73e8]">
-              <Cloud class="w-4 h-4" />
+      <div class="w-full max-w-2xl bg-white rounded-3xl shadow-2xl border border-[#dadce0] flex flex-col max-h-[88vh] overflow-hidden">
+        
+        <!-- Modal Top Bar -->
+        <div class="px-6 py-4 border-b border-[#f1f3f4] flex items-center justify-between flex-shrink-0 bg-[#f8fafd]">
+          <div class="flex items-center gap-2.5">
+            <div class="w-8 h-8 rounded-xl bg-[#e8f0fe] flex items-center justify-center text-[#1a73e8]">
+              <Settings class="w-4 h-4" />
             </div>
             <div>
-              <h2 class="text-base font-bold text-[#202124]">WebDAV 端到端加密同步</h2>
-              <p class="text-[11px] text-[#5f6368]">支持坚果云、Nextcloud 等标准 WebDAV 网盘</p>
+              <h2 class="text-base font-bold text-[#202124]">设置与偏好</h2>
+              <p class="text-[11px] text-[#5f6368]">管理设备安全解锁、云端端到端同步、备份数据及软件版本更新</p>
             </div>
           </div>
-          <button @click="showWebDavModal = false" class="p-1.5 hover:bg-[#f1f3f4] rounded-full text-[#5f6368]">
+          <button @click="showSettingsModal = false" class="p-1.5 hover:bg-[#e8eaed] rounded-full text-[#5f6368] transition-colors cursor-pointer">
             <X class="w-4 h-4" />
           </button>
         </div>
 
-        <div class="space-y-3">
-          <div>
-            <label class="block text-xs font-semibold text-[#5f6368] mb-1">WebDAV 服务器地址</label>
-            <input
-              type="text"
-              v-model="webdavForm.url"
-              placeholder="https://dav.jianguoyun.com/dav/GoogleVault/"
-              class="w-full px-3 py-2 bg-[#f1f3f4] focus:bg-white rounded-xl border border-transparent focus:border-[#1a73e8] text-xs outline-none font-mono"
-            />
-          </div>
-
-          <div>
-            <label class="block text-xs font-semibold text-[#5f6368] mb-1">账号 / 邮箱</label>
-            <input
-              type="text"
-              v-model="webdavForm.username"
-              placeholder="your_email@example.com"
-              class="w-full px-3 py-2 bg-[#f1f3f4] focus:bg-white rounded-xl border border-transparent focus:border-[#1a73e8] text-xs outline-none"
-            />
-          </div>
-
-          <div>
-            <label class="block text-xs font-semibold text-[#5f6368] mb-1">应用密码 / Token</label>
-            <input
-              type="password"
-              v-model="webdavForm.password"
-              placeholder="网盘生成的专用应用授权密码..."
-              class="w-full px-3 py-2 bg-[#f1f3f4] focus:bg-white rounded-xl border border-transparent focus:border-[#1a73e8] text-xs outline-none font-mono"
-            />
-          </div>
-
-          <div v-if="webdavStatus" class="p-2.5 bg-[#f8fafd] rounded-xl border border-[#dadce0] text-xs leading-relaxed text-[#3c4043]">
-            {{ webdavStatus }}
-          </div>
-
-          <!-- Buttons -->
-          <div class="grid grid-cols-2 gap-2 pt-2">
-            <button
-              type="button"
-              @click="handleTestWebDav"
-              :disabled="isWebDavSyncing"
-              class="py-2 bg-[#f1f3f4] hover:bg-[#e8eaed] text-[#3c4043] rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 transition-colors disabled:opacity-50"
-            >
-              <RefreshCw :class="['w-3.5 h-3.5 text-[#1a73e8]', isWebDavSyncing ? 'animate-spin' : '']" />
-              <span>测试连接</span>
-            </button>
-            <button
-              type="button"
-              @click="handleSaveWebDavConfig"
-              class="py-2 bg-[#f1f3f4] hover:bg-[#e8eaed] text-[#3c4043] rounded-xl text-xs font-medium transition-colors"
-            >
-              <span>保存配置</span>
-            </button>
-          </div>
-
-          <div class="grid grid-cols-2 gap-2 pt-1 border-t border-[#f1f3f4]">
-            <button
-              type="button"
-              @click="handleUploadWebDav"
-              :disabled="isWebDavSyncing"
-              class="py-2.5 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 shadow-sm transition-all disabled:opacity-50"
-            >
-              <Upload class="w-3.5 h-3.5" />
-              <span>⬆ 上传备份至云端</span>
-            </button>
-            <button
-              type="button"
-              @click="handleDownloadWebDav"
-              :disabled="isWebDavSyncing"
-              class="py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 shadow-sm transition-all disabled:opacity-50"
-            >
-              <Download class="w-3.5 h-3.5" />
-              <span>⬇ 从云端恢复覆盖</span>
-            </button>
-          </div>
-
-          <p class="text-[11px] text-[#80868b] text-center pt-1">
-            传输与云端存储均为 AES-256-GCM 强加密密文，无主密码即使云服务商也无法解密。
-          </p>
-        </div>
-      </div>
-    </div>
-
-    <!-- 8. BACKUPS & EXPORT MODAL -->
-    <div
-      v-if="showBackupsModal"
-      class="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4"
-    >
-      <div class="w-full max-w-lg bg-white rounded-3xl p-6 shadow-xl border border-[#dadce0] flex flex-col max-h-[85vh]">
-        <div class="flex items-center justify-between pb-3 border-b border-[#f1f3f4] mb-3">
-          <div class="flex items-center gap-2">
-            <div class="w-7 h-7 rounded-lg bg-[#e8f0fe] flex items-center justify-center text-[#1a73e8]">
-              <History class="w-4 h-4" />
-            </div>
-            <div>
-              <h2 class="text-base font-bold text-[#202124]">历史版本快照与数据导出</h2>
-              <p class="text-[11px] text-[#5f6368]">自动轮转备份防丢失，支持任意历史节点回滚</p>
-            </div>
-          </div>
-          <button @click="showBackupsModal = false" class="p-1.5 hover:bg-[#f1f3f4] rounded-full text-[#5f6368]">
-            <X class="w-4 h-4" />
-          </button>
-        </div>
-
-        <!-- Tabs -->
-        <div class="flex gap-2 p-1 bg-[#f1f3f4] rounded-xl mb-4 text-xs font-medium">
+        <!-- Navigation Segmented Tabs -->
+        <div class="flex items-center gap-1.5 px-6 py-2.5 border-b border-[#f1f3f4] bg-white flex-shrink-0 text-xs font-medium overflow-x-auto">
           <button
-            @click="backupTab = 'backups'"
+            @click="settingsTab = 'security'"
             :class="[
-              'flex-1 py-1.5 rounded-lg transition-all',
-              backupTab === 'backups' ? 'bg-white text-[#1a73e8] shadow-sm font-semibold' : 'text-[#5f6368] hover:text-[#202124]'
+              'px-3.5 py-1.5 rounded-full flex items-center gap-1.5 transition-all cursor-pointer',
+              settingsTab === 'security'
+                ? 'bg-[#1a73e8] text-white font-semibold shadow-xs'
+                : 'text-[#5f6368] hover:bg-[#f1f3f4] hover:text-[#202124]'
             ]"
           >
-            历史快照回滚 ({{ backupList.length }})
+            <Fingerprint class="w-3.5 h-3.5" />
+            <span>安全与解锁</span>
           </button>
+
           <button
-            @click="backupTab = 'export'"
+            @click="settingsTab = 'webdav'"
             :class="[
-              'flex-1 py-1.5 rounded-lg transition-all',
-              backupTab === 'export' ? 'bg-white text-[#1a73e8] shadow-sm font-semibold' : 'text-[#5f6368] hover:text-[#202124]'
+              'px-3.5 py-1.5 rounded-full flex items-center gap-1.5 transition-all cursor-pointer',
+              settingsTab === 'webdav'
+                ? 'bg-[#1a73e8] text-white font-semibold shadow-xs'
+                : 'text-[#5f6368] hover:bg-[#f1f3f4] hover:text-[#202124]'
             ]"
           >
-            明文 / 密文数据导出
+            <Cloud class="w-3.5 h-3.5" />
+            <span>云端同步</span>
+          </button>
+
+          <button
+            @click="settingsTab = 'backups'; loadBackupsList()"
+            :class="[
+              'px-3.5 py-1.5 rounded-full flex items-center gap-1.5 transition-all cursor-pointer',
+              settingsTab === 'backups'
+                ? 'bg-[#1a73e8] text-white font-semibold shadow-xs'
+                : 'text-[#5f6368] hover:bg-[#f1f3f4] hover:text-[#202124]'
+            ]"
+          >
+            <History class="w-3.5 h-3.5" />
+            <span>备份与导出</span>
+          </button>
+
+          <button
+            @click="settingsTab = 'updates'"
+            :class="[
+              'px-3.5 py-1.5 rounded-full flex items-center gap-1.5 transition-all cursor-pointer',
+              settingsTab === 'updates'
+                ? 'bg-[#1a73e8] text-white font-semibold shadow-xs'
+                : 'text-[#5f6368] hover:bg-[#f1f3f4] hover:text-[#202124]'
+            ]"
+          >
+            <RefreshCw class="w-3.5 h-3.5" />
+            <span>检查更新</span>
+            <span v-if="updateResult?.has_update" class="w-2 h-2 rounded-full bg-amber-500"></span>
+          </button>
+
+          <button
+            @click="settingsTab = 'about'"
+            :class="[
+              'px-3.5 py-1.5 rounded-full flex items-center gap-1.5 transition-all cursor-pointer',
+              settingsTab === 'about'
+                ? 'bg-[#1a73e8] text-white font-semibold shadow-xs'
+                : 'text-[#5f6368] hover:bg-[#f1f3f4] hover:text-[#202124]'
+            ]"
+          >
+            <Info class="w-3.5 h-3.5" />
+            <span>关于</span>
           </button>
         </div>
 
-        <!-- Tab 1: Backups -->
-        <div v-if="backupTab === 'backups'" class="flex-1 overflow-y-auto space-y-2 pr-1">
-          <div v-if="isLoadingBackups" class="py-8 text-center text-xs text-[#80868b]">
-            正在扫描本地备份目录...
-          </div>
-          <div v-else-if="backupList.length === 0" class="py-8 text-center text-xs text-[#80868b]">
-            暂无历史快照备份（每次修改数据时会自动生成快照）
-          </div>
-          <div
-            v-else
-            v-for="b in backupList"
-            :key="b.filename"
-            class="p-3 bg-[#f8fafd] hover:bg-white border border-[#dadce0]/70 rounded-xl flex items-center justify-between transition-colors"
-          >
-            <div>
-              <div class="font-mono text-xs font-semibold text-[#202124]">{{ b.timestamp }}</div>
-              <div class="text-[11px] text-[#80868b] mt-0.5 font-mono truncate max-w-[260px]">
-                {{ b.filename }} ({{ (b.size_bytes / 1024).toFixed(1) }} KB)
+        <!-- Tab Body Content -->
+        <div class="flex-1 overflow-y-auto p-6 space-y-4">
+          
+          <!-- TAB 1: SECURITY & UNLOCK -->
+          <div v-if="settingsTab === 'security'" class="space-y-4">
+            <!-- Windows Hello Card -->
+            <div class="p-4 bg-[#f8fafd] rounded-2xl border border-[#dadce0] space-y-3">
+              <div class="flex items-start justify-between gap-4">
+                <div class="flex items-center gap-3">
+                  <div class="w-10 h-10 rounded-xl bg-white border border-[#dadce0]/70 flex items-center justify-center text-[#1a73e8] shadow-xs">
+                    <Fingerprint class="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 class="text-xs font-bold text-[#202124] flex items-center gap-2">
+                      <span>Windows Hello / PIN 生物识别解锁</span>
+                      <span
+                        v-if="helloStatus.enrolled"
+                        class="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-semibold"
+                      >
+                        已启用
+                      </span>
+                      <span
+                        v-else-if="helloStatus.available"
+                        class="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 text-[10px] font-semibold"
+                      >
+                        设备支持 (未开启)
+                      </span>
+                      <span
+                        v-else
+                        class="px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 text-[10px] font-semibold"
+                      >
+                        系统不支持
+                      </span>
+                    </h3>
+                    <p class="text-[11px] text-[#5f6368] mt-0.5 leading-relaxed">
+                      开启后，每次打开软件可直接使用当前电脑的指纹、面容或 PIN 码完成一秒安全解锁，无需反复输入主密码。
+                    </p>
+                  </div>
+                </div>
+
+                <!-- Action Button -->
+                <div v-if="helloStatus.available" class="flex-shrink-0">
+                  <button
+                    v-if="helloStatus.enrolled"
+                    @click="toggleWindowsHello"
+                    class="px-3.5 py-1.5 bg-white hover:bg-rose-50 text-rose-600 border border-rose-200 hover:border-rose-300 rounded-xl text-xs font-medium transition-all shadow-xs cursor-pointer"
+                  >
+                    停用免密解锁
+                  </button>
+                  <button
+                    v-else
+                    @click="toggleWindowsHello"
+                    class="px-4 py-1.5 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Fingerprint class="w-3.5 h-3.5" />
+                    <span>立即绑定设备</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Tech Security Note -->
+              <div class="p-3 bg-white/80 rounded-xl border border-[#dadce0]/60 text-[11px] text-[#5f6368] space-y-1">
+                <div class="font-semibold text-[#202124] flex items-center gap-1.5">
+                  <CheckCircle2 class="w-3.5 h-3.5 text-emerald-600" />
+                  <span>硬件级安全机制保护</span>
+                </div>
+                <p class="leading-relaxed">
+                  绑定凭据通过微软 <b>Win32 DPAPI</b> 与当前 Windows 用户安全上下文硬件绑定，并通过 <b>WinRT Interop</b> 保证弹窗直接置顶。即使密码库文件被复制到其他电脑，也绝对无法通过非授权设备解锁。
+                </p>
               </div>
             </div>
-            <button
-              @click="handleRestoreBackup(b.filename)"
-              class="px-3 py-1.5 bg-[#e8f0fe] hover:bg-[#d2e3fc] text-[#1a73e8] rounded-lg text-xs font-medium transition-colors"
-            >
-              回滚此版本
-            </button>
-          </div>
-        </div>
 
-        <!-- Tab 2: Export -->
-        <div v-else class="space-y-4 py-2">
-          <div class="p-3 bg-[#f8fafd] rounded-2xl border border-[#dadce0] space-y-1">
-            <h3 class="text-xs font-bold text-[#202124]">导出为标准 CSV 表格</h3>
-            <p class="text-[11px] text-[#5f6368] leading-relaxed">
-              包含邮箱、登录密码、分组、辅助邮箱、TOTP密钥、备用验证码等全部字段，支持 Excel 直接打开。
-            </p>
-            <button
-              @click="handleExportCsv"
-              class="mt-2 px-4 py-2 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium flex items-center gap-1.5 shadow-sm transition-all"
-            >
-              <FileText class="w-3.5 h-3.5" />
-              <span>导出 CSV 表格文件</span>
-            </button>
+            <!-- Master Password Encryption Architecture -->
+            <div class="p-4 bg-[#f8fafd] rounded-2xl border border-[#dadce0] space-y-2">
+              <h3 class="text-xs font-bold text-[#202124] flex items-center gap-2">
+                <Lock class="w-4 h-4 text-[#1a73e8]" />
+                <span>主密码与本地加密体系</span>
+              </h3>
+              <p class="text-[11px] text-[#5f6368] leading-relaxed">
+                当前安全库所有账号数据使用 <b>AES-256-GCM</b> 强加密，密钥派生采用 <b>Scrypt (N=32768, r=8, p=1)</b> 算法。数据绝无任何明文落盘，主密码本身也不存储于任何文件。请务必牢记主密码。
+              </p>
+            </div>
           </div>
 
-          <div class="p-3 bg-[#f8fafd] rounded-2xl border border-[#dadce0] space-y-1">
-            <h3 class="text-xs font-bold text-[#202124]">导出为 JSON 数据格式</h3>
-            <p class="text-[11px] text-[#5f6368] leading-relaxed">
-              适合迁移至其他数据库或自行解析备份的结构化数据。
-            </p>
-            <button
-              @click="handleExportJson"
-              class="mt-2 px-4 py-2 bg-[#f1f3f4] hover:bg-[#e8eaed] text-[#3c4043] rounded-xl text-xs font-medium flex items-center gap-1.5 transition-colors"
-            >
-              <Download class="w-3.5 h-3.5 text-[#1a73e8]" />
-              <span>导出 JSON 数据文件</span>
-            </button>
+          <!-- TAB 2: WEBDAV CLOUD SYNC -->
+          <div v-else-if="settingsTab === 'webdav'" class="space-y-4">
+            <div class="p-4 bg-[#f8fafd] rounded-2xl border border-[#dadce0] space-y-3">
+              <div class="flex items-center gap-2 pb-2 border-b border-[#dadce0]/60">
+                <Cloud class="w-4 h-4 text-[#1a73e8]" />
+                <span class="text-xs font-bold text-[#202124]">WebDAV 服务器连接配置</span>
+                <span class="text-[10px] text-[#5f6368]">（支持坚果云、Nextcloud、群晖 Synology 等标准网盘）</span>
+              </div>
+
+              <div class="space-y-3">
+                <div>
+                  <label class="block text-xs font-semibold text-[#5f6368] mb-1">WebDAV 服务器地址</label>
+                  <input
+                    type="text"
+                    v-model="webdavForm.url"
+                    placeholder="https://dav.jianguoyun.com/dav/GoogleVault/"
+                    class="w-full px-3 py-2 bg-white focus:bg-white rounded-xl border border-[#dadce0] focus:border-[#1a73e8] text-xs outline-none font-mono"
+                  />
+                </div>
+
+                <div class="grid grid-cols-2 gap-3">
+                  <div>
+                    <label class="block text-xs font-semibold text-[#5f6368] mb-1">账号 / 邮箱</label>
+                    <input
+                      type="text"
+                      v-model="webdavForm.username"
+                      placeholder="your_email@example.com"
+                      class="w-full px-3 py-2 bg-white focus:bg-white rounded-xl border border-[#dadce0] focus:border-[#1a73e8] text-xs outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label class="block text-xs font-semibold text-[#5f6368] mb-1">应用独立密码 / Token</label>
+                    <input
+                      type="password"
+                      v-model="webdavForm.password"
+                      placeholder="网盘生成的专用应用授权密码..."
+                      class="w-full px-3 py-2 bg-white focus:bg-white rounded-xl border border-[#dadce0] focus:border-[#1a73e8] text-xs outline-none font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div v-if="webdavStatus" class="p-2.5 bg-white rounded-xl border border-[#dadce0] text-xs leading-relaxed text-[#3c4043]">
+                  {{ webdavStatus }}
+                </div>
+
+                <!-- Test & Save buttons -->
+                <div class="flex items-center gap-2 pt-1">
+                  <button
+                    type="button"
+                    @click="handleTestWebDav"
+                    :disabled="isWebDavSyncing"
+                    class="px-4 py-2 bg-[#f1f3f4] hover:bg-[#e8eaed] text-[#3c4043] rounded-xl text-xs font-medium flex items-center gap-1.5 transition-colors disabled:opacity-50 cursor-pointer"
+                  >
+                    <RefreshCw :class="['w-3.5 h-3.5 text-[#1a73e8]', isWebDavSyncing ? 'animate-spin' : '']" />
+                    <span>测试连接</span>
+                  </button>
+                  <button
+                    type="button"
+                    @click="handleSaveWebDavConfig"
+                    class="px-4 py-2 bg-white hover:bg-[#f1f3f4] text-[#3c4043] border border-[#dadce0] rounded-xl text-xs font-medium transition-colors cursor-pointer"
+                  >
+                    保存配置
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Sync Actions -->
+            <div class="p-4 bg-[#f8fafd] rounded-2xl border border-[#dadce0] space-y-3">
+              <h3 class="text-xs font-bold text-[#202124]">云端数据流转与同步操作</h3>
+              <div class="grid grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  @click="handleUploadWebDav"
+                  :disabled="isWebDavSyncing"
+                  class="py-2.5 px-3 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 shadow-sm transition-all disabled:opacity-50 cursor-pointer"
+                >
+                  <Upload class="w-3.5 h-3.5" />
+                  <span>⬆ 上传备份至云端 (密文)</span>
+                </button>
+                <button
+                  type="button"
+                  @click="handleDownloadWebDav"
+                  :disabled="isWebDavSyncing"
+                  class="py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 shadow-sm transition-all disabled:opacity-50 cursor-pointer"
+                >
+                  <Download class="w-3.5 h-3.5" />
+                  <span>⬇ 从云端恢复覆盖本地</span>
+                </button>
+              </div>
+              <p class="text-[11px] text-[#80868b] leading-relaxed">
+                提示：上传至云端的完全是经过 AES-256-GCM 强加密的密文，即使网盘服务商也绝无法窥探账号明文信息。从云端恢复覆盖时会自动先对本地数据创建安全快照。
+              </p>
+            </div>
           </div>
+
+          <!-- TAB 3: BACKUPS & EXPORT -->
+          <div v-else-if="settingsTab === 'backups'" class="space-y-4">
+            <!-- Sub-tabs -->
+            <div class="flex gap-2 p-1 bg-[#f1f3f4] rounded-xl text-xs font-medium">
+              <button
+                @click="backupTab = 'backups'"
+                :class="[
+                  'flex-1 py-1.5 rounded-lg transition-all cursor-pointer',
+                  backupTab === 'backups' ? 'bg-white text-[#1a73e8] shadow-sm font-semibold' : 'text-[#5f6368] hover:text-[#202124]'
+                ]"
+              >
+                历史防灾快照回滚 ({{ backupList.length }})
+              </button>
+              <button
+                @click="backupTab = 'export'"
+                :class="[
+                  'flex-1 py-1.5 rounded-lg transition-all cursor-pointer',
+                  backupTab === 'export' ? 'bg-white text-[#1a73e8] shadow-sm font-semibold' : 'text-[#5f6368] hover:text-[#202124]'
+                ]"
+              >
+                明文数据格式导出
+              </button>
+            </div>
+
+            <!-- Sub-Tab 1: Backups List -->
+            <div v-if="backupTab === 'backups'" class="space-y-2 max-h-72 overflow-y-auto pr-1">
+              <div v-if="isLoadingBackups" class="py-8 text-center text-xs text-[#80868b]">
+                正在检索本地快照备份目录...
+              </div>
+              <div v-else-if="backupList.length === 0" class="py-8 text-center text-xs text-[#80868b]">
+                暂无历史快照备份（每次编辑或导入账号时会自动生成快照备份）
+              </div>
+              <div
+                v-else
+                v-for="b in backupList"
+                :key="b.filename"
+                class="p-3 bg-[#f8fafd] hover:bg-white border border-[#dadce0]/70 rounded-xl flex items-center justify-between transition-colors"
+              >
+                <div>
+                  <div class="font-mono text-xs font-semibold text-[#202124]">{{ b.timestamp }}</div>
+                  <div class="text-[11px] text-[#80868b] mt-0.5 font-mono truncate max-w-[280px]">
+                    {{ b.filename }} ({{ (b.size_bytes / 1024).toFixed(1) }} KB)
+                  </div>
+                </div>
+                <button
+                  @click="handleRestoreBackup(b.filename)"
+                  class="px-3 py-1.5 bg-[#e8f0fe] hover:bg-[#d2e3fc] text-[#1a73e8] rounded-lg text-xs font-medium transition-colors cursor-pointer"
+                >
+                  回滚此版本
+                </button>
+              </div>
+            </div>
+
+            <!-- Sub-Tab 2: Export Options -->
+            <div v-else class="space-y-3 py-1">
+              <div class="p-3.5 bg-[#f8fafd] rounded-2xl border border-[#dadce0] space-y-1.5">
+                <h3 class="text-xs font-bold text-[#202124]">导出为标准 CSV 表格文件</h3>
+                <p class="text-[11px] text-[#5f6368] leading-relaxed">
+                  包含邮箱、登录密码、分组、辅助邮箱、TOTP密钥、备用验证码等全部字段，支持使用 Excel、Numbers 直接打开。
+                </p>
+                <button
+                  @click="handleExportCsv"
+                  class="mt-1 px-4 py-2 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
+                >
+                  <FileText class="w-3.5 h-3.5" />
+                  <span>导出 CSV 表格文件</span>
+                </button>
+              </div>
+
+              <div class="p-3.5 bg-[#f8fafd] rounded-2xl border border-[#dadce0] space-y-1.5">
+                <h3 class="text-xs font-bold text-[#202124]">导出为 JSON 数据格式</h3>
+                <p class="text-[11px] text-[#5f6368] leading-relaxed">
+                  结构化明文备份，便于迁移至自建数据库、密码管理器或自行脚本解析。
+                </p>
+                <button
+                  @click="handleExportJson"
+                  class="mt-1 px-4 py-2 bg-white hover:bg-[#f1f3f4] text-[#3c4043] border border-[#dadce0] rounded-xl text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <Download class="w-3.5 h-3.5 text-[#1a73e8]" />
+                  <span>导出 JSON 数据文件</span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- TAB 4: CHECK FOR UPDATES -->
+          <div v-else-if="settingsTab === 'updates'" class="space-y-4">
+            <div class="p-4 bg-[#f8fafd] rounded-2xl border border-[#dadce0] space-y-3">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                  <div class="w-10 h-10 rounded-xl bg-white border border-[#dadce0]/70 flex items-center justify-center text-[#1a73e8] shadow-xs">
+                    <RefreshCw class="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 class="text-xs font-bold text-[#202124] flex items-center gap-2">
+                      <span>软件版本检查更新</span>
+                      <span class="px-2 py-0.5 rounded-full bg-[#e8f0fe] text-[#1a73e8] text-[10px] font-mono font-bold">
+                        当前: v3.0.0
+                      </span>
+                    </h3>
+                    <p class="text-[11px] text-[#5f6368] mt-0.5">
+                      检测 GitHub Releases 官方版本更新，获取最新特性与安全修复
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  @click="checkForUpdates"
+                  :disabled="isCheckingUpdate"
+                  class="px-4 py-2 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium flex items-center gap-1.5 shadow-sm transition-all disabled:opacity-50 cursor-pointer"
+                >
+                  <RefreshCw :class="['w-3.5 h-3.5', isCheckingUpdate ? 'animate-spin' : '']" />
+                  <span>{{ isCheckingUpdate ? "正在检查..." : "立即检查更新" }}</span>
+                </button>
+              </div>
+
+              <!-- GitHub Repo Input -->
+              <div class="pt-2 border-t border-[#dadce0]/60">
+                <label class="block text-[11px] font-semibold text-[#5f6368] mb-1">GitHub 仓库发布源 (Owner / Repo)</label>
+                <div class="flex items-center gap-2">
+                  <input
+                    type="text"
+                    v-model="customRepo"
+                    placeholder="ifnor/GoogleAccountVault"
+                    class="flex-1 px-3 py-1.5 bg-white rounded-xl border border-[#dadce0] text-xs font-mono outline-none focus:border-[#1a73e8]"
+                  />
+                  <button
+                    @click="openExternalUrl(`https://github.com/${customRepo.trim()}/releases`)"
+                    class="px-3 py-1.5 bg-white hover:bg-[#f1f3f4] text-[#5f6368] border border-[#dadce0] rounded-xl text-xs font-medium flex items-center gap-1 transition-colors cursor-pointer"
+                  >
+                    <ExternalLink class="w-3.5 h-3.5" />
+                    <span>查看 Release 页面</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Update Results Section -->
+            <div v-if="updateResult" class="space-y-3">
+              <!-- Case A: New Version Available -->
+              <div
+                v-if="updateResult.has_update"
+                class="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl space-y-3"
+              >
+                <div class="flex items-start justify-between">
+                  <div class="flex items-center gap-2">
+                    <Sparkles class="w-5 h-5 text-emerald-600" />
+                    <div>
+                      <h4 class="text-sm font-bold text-emerald-900">
+                        发现新版本：{{ updateResult.latest_version }}
+                      </h4>
+                      <p class="text-[11px] text-emerald-700 mt-0.5">
+                        {{ updateResult.release_name }} · 发布于 {{ updateResult.published_at.substring(0, 10) }}
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    @click="openExternalUrl(updateResult.download_url || updateResult.release_url)"
+                    class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-all flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Download class="w-3.5 h-3.5" />
+                    <span>前往下载更新</span>
+                  </button>
+                </div>
+
+                <div v-if="updateResult.release_notes" class="p-3 bg-white/90 rounded-xl border border-emerald-100 text-xs font-sans text-[#202124] max-h-48 overflow-y-auto whitespace-pre-wrap leading-relaxed">
+                  {{ updateResult.release_notes }}
+                </div>
+              </div>
+
+              <!-- Case B: Already Latest -->
+              <div
+                v-else
+                class="p-4 bg-white border border-[#dadce0] rounded-2xl flex items-center gap-3 text-xs text-[#202124]"
+              >
+                <CheckCircle2 class="w-5 h-5 text-emerald-600 flex-shrink-0" />
+                <div>
+                  <div class="font-bold">当前已是最新版本 ({{ updateResult.current_version }})</div>
+                  <div class="text-[11px] text-[#5f6368] mt-0.5">您正在使用最新的 Google 账号管家，无需更新。</div>
+                </div>
+              </div>
+            </div>
+
+            <div v-else-if="updateError" class="p-4 bg-rose-50 border border-rose-200 rounded-2xl text-xs text-rose-800 space-y-1">
+              <div class="font-bold flex items-center gap-1.5">
+                <AlertCircle class="w-4 h-4 text-rose-600" />
+                <span>检查更新失败</span>
+              </div>
+              <p class="text-[11px] text-rose-600 leading-relaxed">{{ updateError }}</p>
+            </div>
+          </div>
+
+          <!-- TAB 5: ABOUT -->
+          <div v-else-if="settingsTab === 'about'" class="space-y-4">
+            <div class="p-5 bg-[#f8fafd] rounded-2xl border border-[#dadce0] flex flex-col items-center text-center space-y-3">
+              <div class="w-14 h-14 rounded-2xl bg-white p-2 border border-[#dadce0] shadow-xs overflow-hidden flex items-center justify-center">
+                <img src="/logo.png" alt="Logo" class="w-full h-full object-contain" />
+              </div>
+              <div>
+                <h3 class="text-base font-bold text-[#202124]">Google 账号管家</h3>
+                <p class="text-xs text-[#1a73e8] font-mono font-medium mt-0.5">v3.0.0 (Rust 2.0 + Tauri 2.0 Native Edition)</p>
+              </div>
+              <p class="text-xs text-[#5f6368] max-w-md leading-relaxed">
+                面向专业运维与个人多账号管理的高性能轻量桌面端保险库，集成 RFC 6238 2FA 动态码、Windows Hello 原生免密解锁、多隔离环境浏览器会话与 WebDAV 端到端纯密文同步。
+              </p>
+
+              <div class="flex items-center gap-2 pt-1">
+                <button
+                  @click="openExternalUrl('https://github.com/ifnor/GoogleAccountVault')"
+                  class="px-3.5 py-1.5 bg-white hover:bg-[#f1f3f4] text-[#202124] border border-[#dadce0] rounded-xl text-xs font-medium flex items-center gap-1.5 transition-colors shadow-xs cursor-pointer"
+                >
+                  <Globe class="w-3.5 h-3.5 text-[#1a73e8]" />
+                  <span>GitHub 项目主页</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-3 text-xs">
+              <div class="p-3 bg-[#f8fafd] rounded-xl border border-[#dadce0]">
+                <div class="font-bold text-[#202124]">核心架构</div>
+                <div class="text-[11px] text-[#5f6368] mt-1 font-mono">Rust 2024 · Tauri 2.0 · Vue 3.5</div>
+              </div>
+              <div class="p-3 bg-[#f8fafd] rounded-xl border border-[#dadce0]">
+                <div class="font-bold text-[#202124]">安全标准</div>
+                <div class="text-[11px] text-[#5f6368] mt-1 font-mono">AES-256-GCM · Scrypt · DPAPI</div>
+              </div>
+            </div>
+          </div>
+
         </div>
+
+        <!-- Modal Bottom Close -->
+        <div class="px-6 py-3 border-t border-[#f1f3f4] bg-[#f8fafd] flex justify-end flex-shrink-0">
+          <button
+            @click="showSettingsModal = false"
+            class="px-5 py-2 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium transition-colors shadow-xs cursor-pointer"
+          >
+            完成
+          </button>
+        </div>
+
       </div>
     </div>
 
