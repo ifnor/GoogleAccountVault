@@ -386,9 +386,9 @@ async fn open_in_app_browser(
         .initialization_script(&autofill_script)
         .data_directory(session_dir);
 
-    let window = builder.build().map_err(|e| format!("创建独立窗口失败: {e}"))?;
+    let _window = builder.build().map_err(|e| format!("创建独立窗口失败: {e}"))?;
     #[cfg(debug_assertions)]
-    let _ = window.open_devtools();
+    let _ = _window.open_devtools();
     Ok(())
 }
 
@@ -404,9 +404,9 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(state)
-        .setup(|app| {
+        .setup(|_app| {
             #[cfg(debug_assertions)]
-            if let Some(window) = app.get_webview_window("main") {
+            if let Some(window) = _app.get_webview_window("main") {
                 let _ = window.open_devtools();
             }
             Ok(())
