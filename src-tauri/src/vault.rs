@@ -91,9 +91,23 @@ pub fn decrypt_records(blob: &str, password: &str) -> Result<Vec<AccountRecord>,
     Ok(records)
 }
 
+static VAULT_DATA_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+pub fn init_vault_data_dir(path: PathBuf) {
+    let _ = VAULT_DATA_DIR.set(path);
+}
+
 pub fn vault_data_dir() -> PathBuf {
-    let local_app_data = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from("."));
-    local_app_data.join("GoogleAccountVault")
+    if let Some(dir) = VAULT_DATA_DIR.get() {
+        return dir.clone();
+    }
+
+    #[cfg(target_os = "windows")]
+    if let Some(local_app_data) = dirs::data_local_dir() {
+        return local_app_data.join("GoogleAccountVault");
+    }
+
+    PathBuf::from(".")
 }
 
 pub fn vault_file_path() -> PathBuf {

@@ -394,7 +394,7 @@ async fn open_in_app_browser(
         let _ = std::fs::create_dir_all(&session_dir);
         let ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0";
 
-        let builder = tauri::WebviewWindowBuilder::new(&app, &safe_label, tauri::WebviewUrl::External(parsed_url))
+        let builder = tauri::WebviewWindowBuilder::new(app, &safe_label, tauri::WebviewUrl::External(parsed_url))
             .title(format!("Google 独立会话 - {}", email))
             .inner_size(1050.0, 750.0)
             .center()
@@ -517,9 +517,28 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(state)
-        .setup(|_app| {
+        .setup(|app| {
+            let data_dir = {
+                #[cfg(target_os = "windows")]
+                {
+                    dirs::data_local_dir()
+                        .map(|p| p.join("GoogleAccountVault"))
+                        .or_else(|| app.path().app_data_dir().ok())
+                        .unwrap_or_else(|| std::path::PathBuf::from("."))
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    app.path()
+                        .app_data_dir()
+                        .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                }
+            };
+
+            let _ = std::fs::create_dir_all(&data_dir);
+            vault::init_vault_data_dir(data_dir);
+
             #[cfg(debug_assertions)]
-            if let Some(window) = _app.get_webview_window("main") {
+            if let Some(window) = app.get_webview_window("main") {
                 let _ = window.open_devtools();
             }
             Ok(())
