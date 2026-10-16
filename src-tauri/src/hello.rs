@@ -1,6 +1,6 @@
+use crate::vault;
 use std::fs;
 use std::path::PathBuf;
-use crate::vault;
 
 fn hello_cred_path() -> PathBuf {
     vault::vault_data_dir().join("hello.bin")
@@ -9,11 +9,13 @@ fn hello_cred_path() -> PathBuf {
 #[cfg(target_os = "windows")]
 mod windows_impl {
     use std::ptr::null_mut;
-    use windows::core::{factory, HSTRING};
+    use windows::Security::Credentials::UI::{
+        UserConsentVerificationResult, UserConsentVerifier, UserConsentVerifierAvailability,
+    };
     use windows::Win32::Foundation::HWND;
     use windows::Win32::System::WinRT::IUserConsentVerifierInterop;
     use windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow;
-    use windows::Security::Credentials::UI::{UserConsentVerificationResult, UserConsentVerifier, UserConsentVerifierAvailability};
+    use windows::core::{HSTRING, factory};
     use windows_future::IAsyncOperation;
 
     #[repr(C)]
@@ -80,7 +82,11 @@ mod windows_impl {
 
         let mut result = vec![0u8; out_blob.cb_data as usize];
         unsafe {
-            std::ptr::copy_nonoverlapping(out_blob.pb_data, result.as_mut_ptr(), out_blob.cb_data as usize);
+            std::ptr::copy_nonoverlapping(
+                out_blob.pb_data,
+                result.as_mut_ptr(),
+                out_blob.cb_data as usize,
+            );
             LocalFree(out_blob.pb_data as *mut std::ffi::c_void);
         }
 
@@ -115,7 +121,11 @@ mod windows_impl {
 
         let mut result = vec![0u8; out_blob.cb_data as usize];
         unsafe {
-            std::ptr::copy_nonoverlapping(out_blob.pb_data, result.as_mut_ptr(), out_blob.cb_data as usize);
+            std::ptr::copy_nonoverlapping(
+                out_blob.pb_data,
+                result.as_mut_ptr(),
+                out_blob.cb_data as usize,
+            );
             LocalFree(out_blob.pb_data as *mut std::ffi::c_void);
         }
 
@@ -129,7 +139,10 @@ mod windows_impl {
         Ok(status == UserConsentVerifierAvailability::Available)
     }
 
-    pub async fn verify_user_consent(prompt: &str, raw_hwnd: Option<isize>) -> Result<bool, String> {
+    pub async fn verify_user_consent(
+        prompt: &str,
+        raw_hwnd: Option<isize>,
+    ) -> Result<bool, String> {
         let prompt_h = HSTRING::from(prompt);
 
         if let Some(h_val) = raw_hwnd {
@@ -138,10 +151,12 @@ mod windows_impl {
                 let _ = SetForegroundWindow(hwnd);
             }
 
-            let maybe_op = if let Ok(interop) = factory::<UserConsentVerifier, IUserConsentVerifierInterop>() {
-                let async_op: windows::core::Result<IAsyncOperation<UserConsentVerificationResult>> = unsafe {
-                    interop.RequestVerificationForWindowAsync(hwnd, &prompt_h)
-                };
+            let maybe_op = if let Ok(interop) =
+                factory::<UserConsentVerifier, IUserConsentVerifierInterop>()
+            {
+                let async_op: windows::core::Result<
+                    IAsyncOperation<UserConsentVerificationResult>,
+                > = unsafe { interop.RequestVerificationForWindowAsync(hwnd, &prompt_h) };
                 async_op.ok()
             } else {
                 None

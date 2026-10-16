@@ -1,14 +1,14 @@
-use std::fs;
-use std::path::PathBuf;
 use aes_gcm::{
-    aead::{Aead, KeyInit, Payload},
     Aes256Gcm, Nonce,
+    aead::{Aead, KeyInit, Payload},
 };
 use base64::Engine;
 use chrono::Local;
 use rand::RngCore;
-use scrypt::{scrypt, Params};
+use scrypt::{Params, scrypt};
 use serde::{Deserialize, Serialize};
+use std::fs;
+use std::path::PathBuf;
 
 use crate::models::AccountRecord;
 
@@ -86,8 +86,8 @@ pub fn decrypt_records(blob: &str, password: &str) -> Result<Vec<AccountRecord>,
         .decrypt(Nonce::from_slice(&nonce), payload)
         .map_err(|_| "主密码错误，或文件已被篡改/损坏".to_string())?;
 
-    let records: Vec<AccountRecord> = serde_json::from_slice(&decrypted)
-        .map_err(|e| format!("账号数据反序列化失败: {e}"))?;
+    let records: Vec<AccountRecord> =
+        serde_json::from_slice(&decrypted).map_err(|e| format!("账号数据反序列化失败: {e}"))?;
     Ok(records)
 }
 
@@ -114,7 +114,11 @@ pub fn vault_file_path() -> PathBuf {
     vault_data_dir().join("accounts.gvault")
 }
 
-pub fn save_vault_atomic(records: &[AccountRecord], password: &str, keep_backups: usize) -> Result<(), String> {
+pub fn save_vault_atomic(
+    records: &[AccountRecord],
+    password: &str,
+    keep_backups: usize,
+) -> Result<(), String> {
     let dir = vault_data_dir();
     fs::create_dir_all(&dir).map_err(|e| format!("创建数据目录失败: {e}"))?;
 
@@ -124,7 +128,11 @@ pub fn save_vault_atomic(records: &[AccountRecord], password: &str, keep_backups
         let backup_dir = dir.join("backups");
         let _ = fs::create_dir_all(&backup_dir);
         let timestamp = Local::now().format("%Y%m%d-%H%M%S").to_string();
-        let backup_name = format!("{}-{}.gvault", timestamp, &uuid::Uuid::new_v4().to_string()[..6]);
+        let backup_name = format!(
+            "{}-{}.gvault",
+            timestamp,
+            &uuid::Uuid::new_v4().to_string()[..6]
+        );
         let backup_file = backup_dir.join(backup_name);
         let _ = fs::copy(&main_path, &backup_file);
 
@@ -159,17 +167,15 @@ mod tests {
 
     #[test]
     fn test_vault_roundtrip() {
-        let sample = vec![
-            AccountRecord {
-                id: "test-uuid-1".to_string(),
-                email: "alice@gmail.com".to_string(),
-                password: "SecurePassword123!".to_string(),
-                group: "工作".to_string(),
-                google_one_status: "active".to_string(),
-                google_one_plan: "2 TB".to_string(),
-                ..Default::default()
-            }
-        ];
+        let sample = vec![AccountRecord {
+            id: "test-uuid-1".to_string(),
+            email: "alice@gmail.com".to_string(),
+            password: "SecurePassword123!".to_string(),
+            group: "工作".to_string(),
+            google_one_status: "active".to_string(),
+            google_one_plan: "2 TB".to_string(),
+            ..Default::default()
+        }];
         let password = "MyMasterPassword@2026";
         let blob = encrypt_records(&sample, password).expect("Encrypt failed");
         let decrypted = decrypt_records(&blob, password).expect("Decrypt failed");

@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
-use std::fs;
 use crate::models::AccountRecord;
 use crate::vault;
+use serde::{Deserialize, Serialize};
+use std::fs;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct BackupFileInfo {
@@ -23,7 +23,11 @@ pub fn list_backups() -> Result<Vec<BackupFileInfo>, String> {
         let path = entry.path();
         if path.extension().map_or(false, |ext| ext == "gvault") {
             if let Ok(metadata) = entry.metadata() {
-                let filename = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                let filename = path
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string();
                 let timestamp = if let Ok(time) = metadata.modified() {
                     let dt: chrono::DateTime<chrono::Local> = time.into();
                     dt.format("%Y-%m-%d %H:%M:%S").to_string()
@@ -60,7 +64,9 @@ pub fn restore_backup(filename: &str, master_password: &str) -> Result<Vec<Accou
 }
 
 pub fn export_records_csv(records: &[AccountRecord]) -> String {
-    let mut csv = String::from("邮箱,登录密码,分组,恢复邮箱,恢复手机,TOTP密钥,Google One状态,Google One方案,备用验证码,已用备用码,备注\n");
+    let mut csv = String::from(
+        "邮箱,登录密码,分组,恢复邮箱,恢复手机,TOTP密钥,Google One状态,Google One方案,备用验证码,已用备用码,备注\n",
+    );
     for r in records {
         let line = format!(
             "\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\"\n",

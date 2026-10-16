@@ -20,7 +20,9 @@ pub fn calculate_totp(raw_input: &str) -> Result<TotpResult, String> {
             .to_uppercase();
 
         let secret = Secret::Encoded(normalized);
-        let secret_bytes = secret.to_bytes().map_err(|e| format!("Base32 密钥格式错误: {e}"))?;
+        let secret_bytes = secret
+            .to_bytes()
+            .map_err(|e| format!("Base32 密钥格式错误: {e}"))?;
 
         TOTP::new_unchecked(
             Algorithm::SHA1,

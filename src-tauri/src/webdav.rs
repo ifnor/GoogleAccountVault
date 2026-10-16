@@ -1,9 +1,9 @@
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+use crate::models::AccountRecord;
+use crate::vault;
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use crate::vault;
-use crate::models::AccountRecord;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct WebDavConfig {
@@ -22,7 +22,8 @@ pub fn load_config() -> Result<Option<WebDavConfig>, String> {
         return Ok(None);
     }
     let data = fs::read_to_string(&path).map_err(|e| format!("读取 WebDAV 配置失败: {e}"))?;
-    let config: WebDavConfig = serde_json::from_str(&data).map_err(|e| format!("解析 WebDAV 配置失败: {e}"))?;
+    let config: WebDavConfig =
+        serde_json::from_str(&data).map_err(|e| format!("解析 WebDAV 配置失败: {e}"))?;
     Ok(Some(config))
 }
 
@@ -30,7 +31,8 @@ pub fn save_config(config: &WebDavConfig) -> Result<(), String> {
     let dir = vault::vault_data_dir();
     let _ = fs::create_dir_all(&dir);
     let path = webdav_config_path();
-    let data = serde_json::to_string_pretty(config).map_err(|e| format!("序列化 WebDAV 配置失败: {e}"))?;
+    let data =
+        serde_json::to_string_pretty(config).map_err(|e| format!("序列化 WebDAV 配置失败: {e}"))?;
     fs::write(&path, data).map_err(|e| format!("保存 WebDAV 配置失败: {e}"))?;
     Ok(())
 }
@@ -72,7 +74,11 @@ pub async fn test_connection(config: &WebDavConfig) -> Result<String, String> {
         .map_err(|e| format!("创建客户端失败: {e}"))?;
 
     // Try MKCOL or GET/PROPFIND on base
-    let resp = client.request(reqwest::Method::from_bytes(b"PROPFIND").unwrap_or(reqwest::Method::GET), &base)
+    let resp = client
+        .request(
+            reqwest::Method::from_bytes(b"PROPFIND").unwrap_or(reqwest::Method::GET),
+            &base,
+        )
         .header("Depth", "0")
         .send()
         .await;
@@ -109,11 +115,16 @@ pub async fn upload_vault(config: &WebDavConfig) -> Result<(), String> {
         .map_err(|e| format!("创建客户端失败: {e}"))?;
 
     // Attempt best-effort MKCOL
-    let _ = client.request(reqwest::Method::from_bytes(b"MKCOL").unwrap_or(reqwest::Method::POST), &base)
+    let _ = client
+        .request(
+            reqwest::Method::from_bytes(b"MKCOL").unwrap_or(reqwest::Method::POST),
+            &base,
+        )
         .send()
         .await;
 
-    let resp = client.put(&target)
+    let resp = client
+        .put(&target)
         .header(CONTENT_TYPE, "application/octet-stream")
         .body(blob)
         .send()
@@ -130,7 +141,10 @@ pub async fn upload_vault(config: &WebDavConfig) -> Result<(), String> {
     }
 }
 
-pub async fn download_vault(config: &WebDavConfig, master_password: &str) -> Result<Vec<AccountRecord>, String> {
+pub async fn download_vault(
+    config: &WebDavConfig,
+    master_password: &str,
+) -> Result<Vec<AccountRecord>, String> {
     let base = normalize_base_url(&config.url)?;
     let target = file_url(&base);
 
@@ -140,7 +154,8 @@ pub async fn download_vault(config: &WebDavConfig, master_password: &str) -> Res
         .build()
         .map_err(|e| format!("创建客户端失败: {e}"))?;
 
-    let resp = client.get(&target)
+    let resp = client
+        .get(&target)
         .send()
         .await
         .map_err(|e| format!("下载请求发送失败: {e}"))?;
@@ -154,8 +169,12 @@ pub async fn download_vault(config: &WebDavConfig, master_password: &str) -> Res
         return Err(format!("下载失败，服务器返回 HTTP {status}"));
     }
 
-    let bytes = resp.bytes().await.map_err(|e| format!("读取云端响应数据失败: {e}"))?;
-    let blob = String::from_utf8(bytes.to_vec()).map_err(|_| "云端文件不是有效的文本格式".to_string())?;
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("读取云端响应数据失败: {e}"))?;
+    let blob =
+        String::from_utf8(bytes.to_vec()).map_err(|_| "云端文件不是有效的文本格式".to_string())?;
 
     // Try decrypting with master_password to verify integrity before overwriting local file
     let records = vault::decrypt_records(&blob, master_password)?;

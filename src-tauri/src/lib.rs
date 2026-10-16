@@ -1,14 +1,14 @@
+pub mod backups;
+pub mod hello;
 pub mod models;
 pub mod totp;
 pub mod utils;
 pub mod vault;
 pub mod webdav;
-pub mod backups;
-pub mod hello;
 
-use std::fs;
 use models::{AccountRecord, TotpResult};
 use parking_lot::RwLock;
+use std::fs;
 use tauri::State;
 
 pub struct AppState {
@@ -31,14 +31,23 @@ pub struct HelloStatus {
 async fn check_windows_hello_status() -> Result<HelloStatus, String> {
     let available = hello::check_hello_availability().await.unwrap_or(false);
     let enrolled = hello::is_hello_enrolled();
-    Ok(HelloStatus { available, enrolled })
+    Ok(HelloStatus {
+        available,
+        enrolled,
+    })
 }
 
 #[tauri::command]
-async fn enable_windows_hello(window: tauri::WebviewWindow, state: State<'_, AppState>) -> Result<(), String> {
+async fn enable_windows_hello(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     let password = {
         let guard = state.master_password.read();
-        guard.as_ref().ok_or("请先解锁保险库后再启用 Windows Hello")?.clone()
+        guard
+            .as_ref()
+            .ok_or("请先解锁保险库后再启用 Windows Hello")?
+            .clone()
     };
     let _ = window.show();
     let _ = window.set_focus();
@@ -46,7 +55,8 @@ async fn enable_windows_hello(window: tauri::WebviewWindow, state: State<'_, App
     let raw_hwnd = window.hwnd().ok().map(|h| h.0 as isize);
     #[cfg(not(target_os = "windows"))]
     let raw_hwnd: Option<isize> = None;
-    let verified = hello::verify_user_consent("验证身份以启用 Windows Hello / PIN 快速解锁", raw_hwnd).await?;
+    let verified =
+        hello::verify_user_consent("验证身份以启用 Windows Hello / PIN 快速解锁", raw_hwnd).await?;
     if !verified {
         return Err("身份验证未通过或已取消".to_string());
     }
@@ -60,14 +70,21 @@ fn disable_windows_hello() -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn unlock_vault_with_hello(window: tauri::WebviewWindow, state: State<'_, AppState>) -> Result<Vec<AccountRecord>, String> {
+async fn unlock_vault_with_hello(
+    window: tauri::WebviewWindow,
+    state: State<'_, AppState>,
+) -> Result<Vec<AccountRecord>, String> {
     let _ = window.show();
     let _ = window.set_focus();
     #[cfg(target_os = "windows")]
     let raw_hwnd = window.hwnd().ok().map(|h| h.0 as isize);
     #[cfg(not(target_os = "windows"))]
     let raw_hwnd: Option<isize> = None;
-    let verified = hello::verify_user_consent("验证 Windows Hello / PIN 身份以解锁 Google 账号管家", raw_hwnd).await?;
+    let verified = hello::verify_user_consent(
+        "验证 Windows Hello / PIN 身份以解锁 Google 账号管家",
+        raw_hwnd,
+    )
+    .await?;
     if !verified {
         return Err("身份验证未通过或已取消".to_string());
     }
@@ -85,7 +102,10 @@ async fn unlock_vault_with_hello(window: tauri::WebviewWindow, state: State<'_, 
 }
 
 #[tauri::command]
-fn unlock_vault(password: String, state: State<'_, AppState>) -> Result<Vec<AccountRecord>, String> {
+fn unlock_vault(
+    password: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<AccountRecord>, String> {
     let path = vault::vault_file_path();
     if !path.exists() {
         return Err("保险库文件不存在，请先创建保险库".to_string());
@@ -126,7 +146,10 @@ fn get_records(state: State<'_, AppState>) -> Result<Vec<AccountRecord>, String>
 }
 
 #[tauri::command]
-fn save_record(mut record: AccountRecord, state: State<'_, AppState>) -> Result<AccountRecord, String> {
+fn save_record(
+    mut record: AccountRecord,
+    state: State<'_, AppState>,
+) -> Result<AccountRecord, String> {
     let password_lock = state.master_password.read();
     let password = password_lock.as_ref().ok_or("保险库已锁定，无法保存")?;
 
@@ -193,7 +216,10 @@ fn load_webdav_config() -> Result<Option<webdav::WebDavConfig>, String> {
 }
 
 #[tauri::command]
-async fn upload_webdav_vault(config: webdav::WebDavConfig, state: State<'_, AppState>) -> Result<(), String> {
+async fn upload_webdav_vault(
+    config: webdav::WebDavConfig,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     if state.master_password.read().is_none() {
         return Err("保险库已锁定，无法上传".to_string());
     }
@@ -201,10 +227,16 @@ async fn upload_webdav_vault(config: webdav::WebDavConfig, state: State<'_, AppS
 }
 
 #[tauri::command]
-async fn download_webdav_vault(config: webdav::WebDavConfig, state: State<'_, AppState>) -> Result<Vec<AccountRecord>, String> {
+async fn download_webdav_vault(
+    config: webdav::WebDavConfig,
+    state: State<'_, AppState>,
+) -> Result<Vec<AccountRecord>, String> {
     let password = {
         let password_lock = state.master_password.read();
-        password_lock.as_ref().cloned().ok_or("请先解锁保险库，以便验证并解密云端数据")?
+        password_lock
+            .as_ref()
+            .cloned()
+            .ok_or("请先解锁保险库，以便验证并解密云端数据")?
     };
     let records = webdav::download_vault(&config, &password).await?;
     *state.records.write() = records.clone();
@@ -217,9 +249,14 @@ fn list_vault_backups() -> Result<Vec<backups::BackupFileInfo>, String> {
 }
 
 #[tauri::command]
-fn restore_vault_backup(filename: String, state: State<'_, AppState>) -> Result<Vec<AccountRecord>, String> {
+fn restore_vault_backup(
+    filename: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<AccountRecord>, String> {
     let password_lock = state.master_password.read();
-    let password = password_lock.as_ref().ok_or("请先解锁保险库，以便解密历史快照")?;
+    let password = password_lock
+        .as_ref()
+        .ok_or("请先解锁保险库，以便解密历史快照")?;
     let records = backups::restore_backup(&filename, password)?;
     *state.records.write() = records.clone();
     Ok(records)
@@ -235,7 +272,10 @@ fn export_records_csv_string(state: State<'_, AppState>) -> Result<String, Strin
 }
 
 #[tauri::command]
-fn batch_import_records(new_records: Vec<AccountRecord>, state: State<'_, AppState>) -> Result<usize, String> {
+fn batch_import_records(
+    new_records: Vec<AccountRecord>,
+    state: State<'_, AppState>,
+) -> Result<usize, String> {
     let password_lock = state.master_password.read();
     let password = password_lock.as_ref().ok_or("保险库已锁定，无法导入")?;
 
@@ -251,15 +291,32 @@ fn batch_import_records(new_records: Vec<AccountRecord>, state: State<'_, AppSta
         if r.id.trim().is_empty() {
             r.id = uuid::Uuid::new_v4().to_string();
         }
-        if let Some(pos) = records.iter().position(|existing| existing.email.eq_ignore_ascii_case(&r.email)) {
+        if let Some(pos) = records
+            .iter()
+            .position(|existing| existing.email.eq_ignore_ascii_case(&r.email))
+        {
             let existing = &mut records[pos];
-            if !r.password.trim().is_empty() { existing.password = r.password; }
-            if !r.group.trim().is_empty() { existing.group = r.group; }
-            if !r.recovery_email.trim().is_empty() { existing.recovery_email = r.recovery_email; }
-            if !r.phone.trim().is_empty() { existing.phone = r.phone; }
-            if !r.totp.trim().is_empty() { existing.totp = r.totp; }
-            if !r.backup_codes.trim().is_empty() { existing.backup_codes = r.backup_codes; }
-            if !r.notes.trim().is_empty() { existing.notes = r.notes; }
+            if !r.password.trim().is_empty() {
+                existing.password = r.password;
+            }
+            if !r.group.trim().is_empty() {
+                existing.group = r.group;
+            }
+            if !r.recovery_email.trim().is_empty() {
+                existing.recovery_email = r.recovery_email;
+            }
+            if !r.phone.trim().is_empty() {
+                existing.phone = r.phone;
+            }
+            if !r.totp.trim().is_empty() {
+                existing.totp = r.totp;
+            }
+            if !r.backup_codes.trim().is_empty() {
+                existing.backup_codes = r.backup_codes;
+            }
+            if !r.notes.trim().is_empty() {
+                existing.notes = r.notes;
+            }
         } else {
             records.push(r);
         }
@@ -281,17 +338,19 @@ async fn open_in_app_browser(
     let clean_email = email.trim().to_lowercase();
     let email_uuid = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_DNS, clean_email.as_bytes());
     let safe_label = format!("browser-{}", &email_uuid.to_string()[..8]);
-    
+
     let parsed_url = tauri::Url::parse(&url).map_err(|e| format!("无效网址: {e}"))?;
 
     let safe_email_json = serde_json::to_string(&email).unwrap_or_else(|_| "\"\"".to_string());
-    let safe_pwd_json = serde_json::to_string(&password.as_deref().unwrap_or_default()).unwrap_or_else(|_| "\"\"".to_string());
+    let safe_pwd_json = serde_json::to_string(&password.as_deref().unwrap_or_default())
+        .unwrap_or_else(|_| "\"\"".to_string());
     let current_totp = totp_secret
         .as_ref()
         .and_then(|s| totp::calculate_totp(s).ok())
         .map(|r| r.code)
         .unwrap_or_default();
-    let safe_totp_json = serde_json::to_string(&current_totp).unwrap_or_else(|_| "\"\"".to_string());
+    let safe_totp_json =
+        serde_json::to_string(&current_totp).unwrap_or_else(|_| "\"\"".to_string());
 
     let autofill_script = format!(
         r#"
@@ -372,7 +431,17 @@ async fn open_in_app_browser(
 
     #[cfg(target_os = "android")]
     {
-        let _ = (email, password, totp_secret, safe_label, safe_email_json, safe_pwd_json, current_totp, safe_totp_json, autofill_script);
+        let _ = (
+            email,
+            password,
+            totp_secret,
+            safe_label,
+            safe_email_json,
+            safe_pwd_json,
+            current_totp,
+            safe_totp_json,
+            autofill_script,
+        );
         tauri_plugin_opener::open_url(parsed_url.as_str(), None::<&str>)
             .map_err(|e| format!("调用系统浏览器失败: {e}"))?;
         Ok(())
@@ -394,16 +463,22 @@ async fn open_in_app_browser(
         let _ = std::fs::create_dir_all(&session_dir);
         let ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0";
 
-        let builder = tauri::WebviewWindowBuilder::new(app, &safe_label, tauri::WebviewUrl::External(parsed_url))
-            .title(format!("Google 独立会话 - {}", email))
-            .inner_size(1050.0, 750.0)
-            .center()
-            .user_agent(ua)
-            .devtools(true)
-            .initialization_script(&autofill_script)
-            .data_directory(session_dir);
+        let builder = tauri::WebviewWindowBuilder::new(
+            app,
+            &safe_label,
+            tauri::WebviewUrl::External(parsed_url),
+        )
+        .title(format!("Google 独立会话 - {}", email))
+        .inner_size(1050.0, 750.0)
+        .center()
+        .user_agent(ua)
+        .devtools(true)
+        .initialization_script(&autofill_script)
+        .data_directory(session_dir);
 
-        let _window = builder.build().map_err(|e| format!("创建独立窗口失败: {e}"))?;
+        let _window = builder
+            .build()
+            .map_err(|e| format!("创建独立窗口失败: {e}"))?;
         #[cfg(debug_assertions)]
         let _ = _window.open_devtools();
         Ok(())
@@ -427,14 +502,20 @@ fn parse_semver(v: &str) -> (u32, u32, u32) {
     let parts: Vec<&str> = clean.split('.').collect();
     let major = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
     let minor = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
-    let patch = parts.get(2).and_then(|s| s.split('-').next().unwrap_or("0").parse().ok()).unwrap_or(0);
+    let patch = parts
+        .get(2)
+        .and_then(|s| s.split('-').next().unwrap_or("0").parse().ok())
+        .unwrap_or(0);
     (major, minor, patch)
 }
 
 #[tauri::command]
 async fn check_github_update(repo: Option<String>) -> Result<UpdateInfo, String> {
     let target_repo = repo.unwrap_or_else(|| "ifnor/GoogleAccountVault".to_string());
-    let url = format!("https://api.github.com/repos/{}/releases/latest", target_repo.trim());
+    let url = format!(
+        "https://api.github.com/repos/{}/releases/latest",
+        target_repo.trim()
+    );
 
     let client = reqwest::Client::builder()
         .user_agent("google-account-vault/3.0.0")
@@ -442,9 +523,11 @@ async fn check_github_update(repo: Option<String>) -> Result<UpdateInfo, String>
         .build()
         .map_err(|e| format!("构建 HTTP 客户端失败: {e}"))?;
 
-    let resp = client.get(&url).send().await.map_err(|e| {
-        format!("请求 GitHub Releases 失败: {e}")
-    })?;
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("请求 GitHub Releases 失败: {e}"))?;
 
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(UpdateInfo {
@@ -463,21 +546,30 @@ async fn check_github_update(repo: Option<String>) -> Result<UpdateInfo, String>
         return Err(format!("GitHub API 响应异常: HTTP {}", resp.status()));
     }
 
-    let body = resp.text().await.map_err(|e| format!("读取 GitHub 响应文本失败: {e}"))?;
-    let json: serde_json::Value = serde_json::from_str(&body).map_err(|e| format!("解析 Release JSON 失败: {e}"))?;
+    let body = resp
+        .text()
+        .await
+        .map_err(|e| format!("读取 GitHub 响应文本失败: {e}"))?;
+    let json: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| format!("解析 Release JSON 失败: {e}"))?;
 
     let tag = json["tag_name"].as_str().unwrap_or("3.0.0").to_string();
     let name = json["name"].as_str().unwrap_or(&tag).to_string();
     let notes = json["body"].as_str().unwrap_or("").to_string();
     let published_at = json["published_at"].as_str().unwrap_or("").to_string();
-    let html_url = json["html_url"].as_str().unwrap_or(&format!("https://github.com/{}/releases", target_repo)).to_string();
+    let html_url = json["html_url"]
+        .as_str()
+        .unwrap_or(&format!("https://github.com/{}/releases", target_repo))
+        .to_string();
 
     let mut download_url = None;
     if let Some(assets) = json["assets"].as_array() {
         for asset in assets {
             if let Some(asset_name) = asset["name"].as_str() {
                 if asset_name.ends_with(".exe") {
-                    download_url = asset["browser_download_url"].as_str().map(|s| s.to_string());
+                    download_url = asset["browser_download_url"]
+                        .as_str()
+                        .map(|s| s.to_string());
                     break;
                 }
             }
@@ -502,7 +594,8 @@ async fn check_github_update(repo: Option<String>) -> Result<UpdateInfo, String>
 
 #[tauri::command]
 fn open_external_url(url: String) -> Result<(), String> {
-    tauri_plugin_opener::open_url(url, None::<&str>).map_err(|e| format!("打开系统浏览器链接失败: {e}"))
+    tauri_plugin_opener::open_url(url, None::<&str>)
+        .map_err(|e| format!("打开系统浏览器链接失败: {e}"))
 }
 
 use tauri::Manager;
@@ -514,7 +607,12 @@ pub fn run() {
         records: RwLock::new(Vec::new()),
     };
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    let builder = builder.plugin(tauri_plugin_biometric::init());
+
+    builder
         .plugin(tauri_plugin_opener::init())
         .manage(state)
         .setup(|app| {

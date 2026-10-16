@@ -167,9 +167,43 @@ const editForm = ref<AccountRecord>({
   google_one_status: "unknown"
 });
 
-// Windows Hello state
+// Windows Hello / Mobile Biometrics state
 const helloStatus = ref<{ available: boolean; enrolled: boolean }>({ available: false, enrolled: false });
 const isHelloVerifying = ref(false);
+
+const isMobilePlatform = computed(() => {
+  if (typeof navigator !== "undefined") {
+    return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+  }
+  return false;
+});
+
+async function refreshSecurityStatus() {
+  if (isMobilePlatform.value) {
+    try {
+      const { checkStatus } = await import("@tauri-apps/plugin-biometric");
+      const s = await checkStatus();
+      const enrolled = !!localStorage.getItem("vault_mobile_biometric_token");
+      helloStatus.value = {
+        available: s.isAvailable,
+        enrolled
+      };
+    } catch (e) {
+      console.warn("Mobile biometric check error:", e);
+      const enrolled = !!localStorage.getItem("vault_mobile_biometric_token");
+      helloStatus.value = {
+        available: true,
+        enrolled
+      };
+    }
+  } else {
+    try {
+      helloStatus.value = await invoke<{ available: boolean; enrolled: boolean }>("check_windows_hello_status");
+    } catch (e) {
+      console.warn("Check Windows Hello error:", e);
+    }
+  }
+}
 
 // Check vault on mount
 onMounted(async () => {
@@ -178,11 +212,7 @@ onMounted(async () => {
   } catch (e) {
     vaultExists.value = false;
   }
-  try {
-    helloStatus.value = await invoke<{ available: boolean; enrolled: boolean }>("check_windows_hello_status");
-  } catch (e) {
-    console.warn("Check Windows Hello error:", e);
-  }
+  await refreshSecurityStatus();
 });
 
 onUnmounted(() => {
@@ -218,14 +248,40 @@ async function handleHelloUnlock() {
   isHelloVerifying.value = true;
   unlockError.value = "";
   try {
-    records.value = await invoke<AccountRecord[]>("unlock_vault_with_hello");
-    isUnlocked.value = true;
-    if (records.value.length > 0) {
-      selectedId.value = records.value[0].id;
+    if (isMobilePlatform.value) {
+      const cred = localStorage.getItem("vault_mobile_biometric_token");
+      if (!cred) {
+        throw new Error("手机端尚未绑定生物识别，请使用主密码登录");
+      }
+      const { biometricCipher } = await import("@tauri-apps/plugin-biometric");
+      const res = await biometricCipher("验证指纹、面容或锁屏密码以解锁保险库", {
+        dataToDecrypt: cred,
+        title: "安全验证解锁",
+        subtitle: "请验证指纹、面容或锁屏密码",
+        allowDeviceCredential: true
+      });
+      if (!res || !res.data) {
+        throw new Error("生物识别解密失败");
+      }
+      const pwd = res.data;
+      records.value = await invoke<AccountRecord[]>("unlock_vault", { password: pwd });
+      masterPassword.value = pwd;
+      isUnlocked.value = true;
+      if (records.value.length > 0) {
+        selectedId.value = records.value[0].id;
+      }
+      startTotpTicker();
+    } else {
+      records.value = await invoke<AccountRecord[]>("unlock_vault_with_hello");
+      isUnlocked.value = true;
+      if (records.value.length > 0) {
+        selectedId.value = records.value[0].id;
+      }
+      startTotpTicker();
     }
-    startTotpTicker();
   } catch (err: any) {
-    unlockError.value = typeof err === "string" ? err : (err?.message || "Windows Hello 验证未通过");
+    const defaultMsg = isMobilePlatform.value ? "手机安全验证未通过" : "Windows Hello 验证未通过";
+    unlockError.value = typeof err === "string" ? err : (err?.message || defaultMsg);
   } finally {
     isHelloVerifying.value = false;
   }
@@ -233,17 +289,43 @@ async function handleHelloUnlock() {
 
 async function toggleWindowsHello() {
   try {
-    if (helloStatus.value.enrolled) {
-      await invoke("disable_windows_hello");
-      helloStatus.value.enrolled = false;
-      notify("已停用 Windows Hello / PIN 快速免密解锁", "info");
+    if (isMobilePlatform.value) {
+      if (helloStatus.value.enrolled) {
+        localStorage.removeItem("vault_mobile_biometric_token");
+        helloStatus.value.enrolled = false;
+        notify("已停用手机生物识别 / 屏幕锁免密解锁", "info");
+      } else {
+        if (!masterPassword.value) {
+          notify("未获取到当前主密码，请重新使用主密码解锁后再绑定", "warning");
+          return;
+        }
+        const { biometricCipher } = await import("@tauri-apps/plugin-biometric");
+        const res = await biometricCipher("验证手机指纹、面容或屏幕锁以绑定快速解锁", {
+          dataToEncrypt: masterPassword.value,
+          title: "绑定安全验证",
+          subtitle: "验证指纹、面容或锁屏密码以绑定快速登录",
+          allowDeviceCredential: true
+        });
+        if (res && res.data) {
+          localStorage.setItem("vault_mobile_biometric_token", res.data);
+          helloStatus.value.enrolled = true;
+          notify("手机安全验证已成功绑定！下次可直接通过指纹/面容/屏幕锁一键解锁", "success", 4000);
+        }
+      }
     } else {
-      await invoke("enable_windows_hello");
-      helloStatus.value.enrolled = true;
-      notify("Windows Hello / PIN 快速解锁已成功绑定！下次可直接指纹/面容/PIN一键解锁", "success", 4000);
+      if (helloStatus.value.enrolled) {
+        await invoke("disable_windows_hello");
+        helloStatus.value.enrolled = false;
+        notify("已停用 Windows Hello / PIN 快速免密解锁", "info");
+      } else {
+        await invoke("enable_windows_hello");
+        helloStatus.value.enrolled = true;
+        notify("Windows Hello / PIN 快速解锁已成功绑定！下次可直接指纹/面容/PIN一键解锁", "success", 4000);
+      }
     }
   } catch (err: any) {
-    notify("设置 Windows Hello 失败: " + err, "error");
+    const errorMsg = typeof err === "string" ? err : (err?.message || "操作取消或验证未通过");
+    notify((isMobilePlatform.value ? "绑定安全验证失败: " : "设置 Windows Hello 失败: ") + errorMsg, "error");
   }
 }
 
@@ -257,11 +339,7 @@ async function lockVault() {
   showMobileMoreMenu.value = false;
   showMobileSearch.value = false;
   if (totpTimer) clearInterval(totpTimer);
-  try {
-    helloStatus.value = await invoke<{ available: boolean; enrolled: boolean }>("check_windows_hello_status");
-  } catch (e) {
-    // ignore
-  }
+  await refreshSecurityStatus();
 }
 
 // TOTP Periodic Updates
@@ -966,7 +1044,7 @@ const passwordStrength = computed(() => {
       <div class="w-full max-w-md bg-white rounded-3xl p-8 shadow-sm border border-[#dadce0]/70 flex flex-col items-center">
         <!-- Google Brand Logo -->
         <div class="w-16 h-16 rounded-2xl bg-white shadow-sm border border-[#dadce0]/70 flex items-center justify-center mb-5 p-2.5 overflow-hidden">
-          <img src="/logo.png" alt="Google 账号管家 Logo" class="w-full h-full object-contain" />
+          <img src="/app.ico" alt="Google 账号管家 Logo" class="w-full h-full object-contain" />
         </div>
         <h1 class="text-2xl font-bold tracking-tight text-[#202124] mb-1">Google 账号管家</h1>
         <p class="text-sm text-[#5f6368] mb-6 flex items-center gap-1.5">
@@ -1005,7 +1083,7 @@ const passwordStrength = computed(() => {
           </button>
         </form>
 
-        <!-- Windows Hello Fast Unlock Button -->
+        <!-- Fast Biometric / Windows Hello Fast Unlock Button -->
         <div v-if="helloStatus.enrolled && vaultExists" class="w-full flex flex-col items-center mt-3">
           <div class="w-full flex items-center my-2 text-xs text-[#80868b]">
             <div class="flex-1 border-t border-[#dadce0]"></div>
@@ -1020,13 +1098,13 @@ const passwordStrength = computed(() => {
             class="w-full py-3 bg-[#e8f0fe] hover:bg-[#d2e3fc] active:bg-[#c2dcff] text-[#1a73e8] font-medium rounded-xl transition-all flex items-center justify-center gap-2.5 text-sm border border-[#1a73e8]/30 shadow-sm"
           >
             <Fingerprint class="w-5 h-5 text-[#1a73e8]" />
-            <span>{{ isHelloVerifying ? "请在 Windows 弹窗中完成验证..." : "使用 Windows Hello / PIN 快速解锁" }}</span>
+            <span>{{ isHelloVerifying ? (isMobilePlatform ? "请在手机弹窗中完成验证..." : "请在 Windows 弹窗中完成验证...") : (isMobilePlatform ? "使用手机生物识别 / 屏幕锁快速解锁" : "使用 Windows Hello / PIN 快速解锁") }}</span>
           </button>
         </div>
 
         <div v-else-if="helloStatus.available && vaultExists" class="w-full mt-4 px-3.5 py-2.5 bg-[#f8fafd] border border-[#dadce0] rounded-xl text-xs text-[#5f6368] flex items-center gap-2">
           <Fingerprint class="w-4 h-4 text-[#1a73e8] flex-shrink-0" />
-          <span>本机支持 Windows Hello，首次主密码解锁后可在顶部一键绑定指纹/PIN快速登录。</span>
+          <span>{{ isMobilePlatform ? "手机支持生物识别与锁屏密码，首次主密码解锁后可在设置中一键绑定快速登录。" : "本机支持 Windows Hello，首次主密码解锁后可在顶部一键绑定指纹/PIN快速登录。" }}</span>
         </div>
 
         <p class="text-xs text-[#80868b] text-center mt-6">
@@ -1042,7 +1120,7 @@ const passwordStrength = computed(() => {
         <!-- Brand -->
         <div class="flex items-center gap-3">
           <div class="w-8 h-8 rounded-lg bg-white border border-[#dadce0]/60 flex items-center justify-center p-0.5 overflow-hidden shadow-xs">
-            <img src="/logo.png" alt="Logo" class="w-full h-full object-contain" />
+            <img src="/app.ico" alt="Logo" class="w-full h-full object-contain" />
           </div>
           <div class="flex items-baseline gap-2">
             <span class="font-bold text-base text-[#202124] tracking-tight">Google 账号管家</span>
@@ -1125,7 +1203,7 @@ const passwordStrength = computed(() => {
           <!-- Left: Brand -->
           <div class="flex items-center gap-2 min-w-0">
             <div class="w-7 h-7 rounded-lg bg-white border border-[#dadce0]/60 flex items-center justify-center p-0.5 overflow-hidden shadow-2xs flex-shrink-0">
-              <img src="/logo.png" alt="Logo" class="w-full h-full object-contain" />
+              <img src="/app.ico" alt="Logo" class="w-full h-full object-contain" />
             </div>
             <span class="font-bold text-sm text-[#202124] tracking-tight whitespace-nowrap">Google 账号管家</span>
           </div>
@@ -2090,131 +2168,133 @@ const passwordStrength = computed(() => {
     <!-- 7. UNIFIED SETTINGS MODAL -->
     <div
       v-if="showSettingsModal"
-      class="fixed inset-0 bg-black/45 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in"
+      class="fixed inset-0 bg-black/45 backdrop-blur-sm z-50 flex items-center justify-center p-2 sm:p-4 animate-fade-in"
     >
-      <div class="w-full max-w-2xl bg-white rounded-3xl shadow-2xl border border-[#dadce0] flex flex-col max-h-[88vh] overflow-hidden">
+      <div class="w-full max-w-2xl bg-white rounded-3xl shadow-2xl border border-[#dadce0] flex flex-col max-h-[92vh] sm:max-h-[88vh] overflow-hidden my-auto">
         
         <!-- Modal Top Bar -->
-        <div class="px-6 py-4 border-b border-[#f1f3f4] flex items-center justify-between flex-shrink-0 bg-[#f8fafd]">
-          <div class="flex items-center gap-2.5">
-            <div class="w-8 h-8 rounded-xl bg-[#e8f0fe] flex items-center justify-center text-[#1a73e8]">
-              <Settings class="w-4 h-4" />
+        <div class="px-4 sm:px-6 py-3 sm:py-4 border-b border-[#f1f3f4] flex items-center justify-between flex-shrink-0 bg-[#f8fafd]">
+          <div class="flex items-center gap-2.5 min-w-0">
+            <div class="w-8 h-8 rounded-xl bg-white border border-[#dadce0]/70 p-1 flex items-center justify-center shadow-2xs flex-shrink-0">
+              <img src="/app.ico" alt="Logo" class="w-full h-full object-contain" />
             </div>
-            <div>
-              <h2 class="text-base font-bold text-[#202124]">设置与偏好</h2>
-              <p class="text-[11px] text-[#5f6368]">管理设备安全解锁、云端端到端同步、备份数据及软件版本更新</p>
+            <div class="min-w-0">
+              <h2 class="text-base font-bold text-[#202124] truncate">设置与偏好</h2>
+              <p class="text-[11px] text-[#5f6368] truncate">
+                {{ isMobilePlatform ? '安全验证 · 云端端到端同步 · 备份导出 · 检查更新' : '设备安全解锁 · 云端端到端同步 · 备份导出 · 检查更新' }}
+              </p>
             </div>
           </div>
-          <button @click="showSettingsModal = false" class="p-1.5 hover:bg-[#e8eaed] rounded-full text-[#5f6368] transition-colors cursor-pointer">
+          <button @click="showSettingsModal = false" class="p-1.5 hover:bg-[#e8eaed] rounded-full text-[#5f6368] transition-colors cursor-pointer flex-shrink-0">
             <X class="w-4 h-4" />
           </button>
         </div>
 
         <!-- Navigation Segmented Tabs -->
-        <div class="flex items-center gap-1.5 px-6 py-2.5 border-b border-[#f1f3f4] bg-white flex-shrink-0 text-xs font-medium overflow-x-auto">
+        <div class="flex items-center gap-1.5 px-3 sm:px-6 py-2 sm:py-2.5 border-b border-[#f1f3f4] bg-white flex-shrink-0 text-xs font-medium overflow-x-auto no-scrollbar whitespace-nowrap">
           <button
             @click="settingsTab = 'security'"
             :class="[
-              'px-3.5 py-1.5 rounded-full flex items-center gap-1.5 transition-all cursor-pointer',
+              'px-3.5 py-1.5 rounded-full flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap flex-shrink-0',
               settingsTab === 'security'
                 ? 'bg-[#1a73e8] text-white font-semibold shadow-xs'
                 : 'text-[#5f6368] hover:bg-[#f1f3f4] hover:text-[#202124]'
             ]"
           >
-            <Fingerprint class="w-3.5 h-3.5" />
-            <span>安全与解锁</span>
+            <Fingerprint class="w-3.5 h-3.5 flex-shrink-0" />
+            <span>{{ isMobilePlatform ? '安全验证' : '安全与解锁' }}</span>
           </button>
 
           <button
             @click="settingsTab = 'webdav'"
             :class="[
-              'px-3.5 py-1.5 rounded-full flex items-center gap-1.5 transition-all cursor-pointer',
+              'px-3.5 py-1.5 rounded-full flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap flex-shrink-0',
               settingsTab === 'webdav'
                 ? 'bg-[#1a73e8] text-white font-semibold shadow-xs'
                 : 'text-[#5f6368] hover:bg-[#f1f3f4] hover:text-[#202124]'
             ]"
           >
-            <Cloud class="w-3.5 h-3.5" />
+            <Cloud class="w-3.5 h-3.5 flex-shrink-0" />
             <span>云端同步</span>
           </button>
 
           <button
             @click="settingsTab = 'backups'; loadBackupsList()"
             :class="[
-              'px-3.5 py-1.5 rounded-full flex items-center gap-1.5 transition-all cursor-pointer',
+              'px-3.5 py-1.5 rounded-full flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap flex-shrink-0',
               settingsTab === 'backups'
                 ? 'bg-[#1a73e8] text-white font-semibold shadow-xs'
                 : 'text-[#5f6368] hover:bg-[#f1f3f4] hover:text-[#202124]'
             ]"
           >
-            <History class="w-3.5 h-3.5" />
+            <History class="w-3.5 h-3.5 flex-shrink-0" />
             <span>备份与导出</span>
           </button>
 
           <button
             @click="settingsTab = 'updates'"
             :class="[
-              'px-3.5 py-1.5 rounded-full flex items-center gap-1.5 transition-all cursor-pointer',
+              'px-3.5 py-1.5 rounded-full flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap flex-shrink-0',
               settingsTab === 'updates'
                 ? 'bg-[#1a73e8] text-white font-semibold shadow-xs'
                 : 'text-[#5f6368] hover:bg-[#f1f3f4] hover:text-[#202124]'
             ]"
           >
-            <RefreshCw class="w-3.5 h-3.5" />
+            <RefreshCw class="w-3.5 h-3.5 flex-shrink-0" />
             <span>检查更新</span>
-            <span v-if="updateResult?.has_update" class="w-2 h-2 rounded-full bg-amber-500"></span>
+            <span v-if="updateResult?.has_update" class="w-2 h-2 rounded-full bg-amber-500 flex-shrink-0"></span>
           </button>
 
           <button
             @click="settingsTab = 'about'"
             :class="[
-              'px-3.5 py-1.5 rounded-full flex items-center gap-1.5 transition-all cursor-pointer',
+              'px-3.5 py-1.5 rounded-full flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap flex-shrink-0',
               settingsTab === 'about'
                 ? 'bg-[#1a73e8] text-white font-semibold shadow-xs'
                 : 'text-[#5f6368] hover:bg-[#f1f3f4] hover:text-[#202124]'
             ]"
           >
-            <Info class="w-3.5 h-3.5" />
+            <Info class="w-3.5 h-3.5 flex-shrink-0" />
             <span>关于</span>
           </button>
         </div>
 
         <!-- Tab Body Content -->
-        <div class="flex-1 overflow-y-auto p-6 space-y-4">
+        <div class="flex-1 overflow-y-auto p-3.5 sm:p-5 md:p-6 space-y-4">
           
           <!-- TAB 1: SECURITY & UNLOCK -->
           <div v-if="settingsTab === 'security'" class="space-y-4">
-            <!-- Windows Hello Card -->
-            <div class="p-4 bg-[#f8fafd] rounded-2xl border border-[#dadce0] space-y-3">
-              <div class="flex items-start justify-between gap-4">
-                <div class="flex items-center gap-3">
-                  <div class="w-10 h-10 rounded-xl bg-white border border-[#dadce0]/70 flex items-center justify-center text-[#1a73e8] shadow-xs">
+            <!-- Hardware Security Card -->
+            <div class="p-3.5 sm:p-4 bg-[#f8fafd] rounded-2xl border border-[#dadce0] space-y-3">
+              <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div class="flex items-center gap-3 min-w-0">
+                  <div class="w-10 h-10 rounded-xl bg-white border border-[#dadce0]/70 flex items-center justify-center text-[#1a73e8] shadow-xs flex-shrink-0">
                     <Fingerprint class="w-5 h-5" />
                   </div>
-                  <div>
-                    <h3 class="text-xs font-bold text-[#202124] flex items-center gap-2">
-                      <span>Windows Hello / PIN 生物识别解锁</span>
+                  <div class="min-w-0">
+                    <h3 class="text-xs font-bold text-[#202124] flex items-center gap-2 flex-wrap">
+                      <span>{{ isMobilePlatform ? '手机生物识别 / 屏幕锁快速解锁' : 'Windows Hello / PIN 生物识别解锁' }}</span>
                       <span
                         v-if="helloStatus.enrolled"
-                        class="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-semibold"
+                        class="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-semibold whitespace-nowrap"
                       >
                         已启用
                       </span>
                       <span
                         v-else-if="helloStatus.available"
-                        class="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 text-[10px] font-semibold"
+                        class="px-2 py-0.5 rounded-full bg-gray-100 text-gray-600 text-[10px] font-semibold whitespace-nowrap"
                       >
-                        设备支持 (未开启)
+                        {{ isMobilePlatform ? '手机支持 (未开启)' : '设备支持 (未开启)' }}
                       </span>
                       <span
                         v-else
-                        class="px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 text-[10px] font-semibold"
+                        class="px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 text-[10px] font-semibold whitespace-nowrap"
                       >
                         系统不支持
                       </span>
                     </h3>
                     <p class="text-[11px] text-[#5f6368] mt-0.5 leading-relaxed">
-                      开启后，每次打开软件可直接使用当前电脑的指纹、面容或 PIN 码完成一秒安全解锁，无需反复输入主密码。
+                      {{ isMobilePlatform ? '开启后，每次打开软件可直接使用手机指纹、面容或锁屏密码完成一键安全解锁，无需输入主密码。' : '开启后，每次打开软件可直接使用当前电脑的指纹、面容或 PIN 码完成一秒安全解锁，无需反复输入主密码。' }}
                     </p>
                   </div>
                 </div>
@@ -2224,17 +2304,17 @@ const passwordStrength = computed(() => {
                   <button
                     v-if="helloStatus.enrolled"
                     @click="toggleWindowsHello"
-                    class="px-3.5 py-1.5 bg-white hover:bg-rose-50 text-rose-600 border border-rose-200 hover:border-rose-300 rounded-xl text-xs font-medium transition-all shadow-xs cursor-pointer"
+                    class="w-full sm:w-auto px-3.5 py-1.5 bg-white hover:bg-rose-50 text-rose-600 border border-rose-200 hover:border-rose-300 rounded-xl text-xs font-medium transition-all shadow-xs cursor-pointer text-center"
                   >
-                    停用免密解锁
+                    {{ isMobilePlatform ? '停用手机验证' : '停用免密解锁' }}
                   </button>
                   <button
                     v-else
                     @click="toggleWindowsHello"
-                    class="px-4 py-1.5 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium transition-all shadow-xs flex items-center gap-1.5 cursor-pointer"
+                    class="w-full sm:w-auto px-4 py-1.5 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium transition-all shadow-xs flex items-center justify-center gap-1.5 cursor-pointer"
                   >
                     <Fingerprint class="w-3.5 h-3.5" />
-                    <span>立即绑定设备</span>
+                    <span>{{ isMobilePlatform ? '立即绑定手机验证' : '立即绑定设备' }}</span>
                   </button>
                 </div>
               </div>
@@ -2242,19 +2322,19 @@ const passwordStrength = computed(() => {
               <!-- Tech Security Note -->
               <div class="p-3 bg-white/80 rounded-xl border border-[#dadce0]/60 text-[11px] text-[#5f6368] space-y-1">
                 <div class="font-semibold text-[#202124] flex items-center gap-1.5">
-                  <CheckCircle2 class="w-3.5 h-3.5 text-emerald-600" />
+                  <CheckCircle2 class="w-3.5 h-3.5 text-emerald-600 flex-shrink-0" />
                   <span>硬件级安全机制保护</span>
                 </div>
                 <p class="leading-relaxed">
-                  绑定凭据通过微软 <b>Win32 DPAPI</b> 与当前 Windows 用户安全上下文硬件绑定，并通过 <b>WinRT Interop</b> 保证弹窗直接置顶。即使密码库文件被复制到其他电脑，也绝对无法通过非授权设备解锁。
+                  {{ isMobilePlatform ? '在移动端受 Android Keystore 硬件级密钥安全机制与 BiometricPrompt 生物识别框架保护。未通过设备授权验证无法解密任何密码凭据。' : '绑定凭据通过微软 Win32 DPAPI 与当前 Windows 用户安全上下文硬件绑定，并通过 WinRT Interop 保证弹窗直接置顶。即使密码库文件被复制到其他电脑，也绝对无法通过非授权设备解锁。' }}
                 </p>
               </div>
             </div>
 
             <!-- Master Password Encryption Architecture -->
-            <div class="p-4 bg-[#f8fafd] rounded-2xl border border-[#dadce0] space-y-2">
+            <div class="p-3.5 sm:p-4 bg-[#f8fafd] rounded-2xl border border-[#dadce0] space-y-2">
               <h3 class="text-xs font-bold text-[#202124] flex items-center gap-2">
-                <Lock class="w-4 h-4 text-[#1a73e8]" />
+                <Lock class="w-4 h-4 text-[#1a73e8] flex-shrink-0" />
                 <span>主密码与本地加密体系</span>
               </h3>
               <p class="text-[11px] text-[#5f6368] leading-relaxed">
@@ -2265,11 +2345,13 @@ const passwordStrength = computed(() => {
 
           <!-- TAB 2: WEBDAV CLOUD SYNC -->
           <div v-else-if="settingsTab === 'webdav'" class="space-y-4">
-            <div class="p-4 bg-[#f8fafd] rounded-2xl border border-[#dadce0] space-y-3">
-              <div class="flex items-center gap-2 pb-2 border-b border-[#dadce0]/60">
-                <Cloud class="w-4 h-4 text-[#1a73e8]" />
-                <span class="text-xs font-bold text-[#202124]">WebDAV 服务器连接配置</span>
-                <span class="text-[10px] text-[#5f6368]">（支持坚果云、Nextcloud、群晖 Synology 等标准网盘）</span>
+            <div class="p-3.5 sm:p-4 bg-[#f8fafd] rounded-2xl border border-[#dadce0] space-y-3">
+              <div class="flex flex-col sm:flex-row sm:items-center gap-1.5 pb-2 border-b border-[#dadce0]/60">
+                <div class="flex items-center gap-2">
+                  <Cloud class="w-4 h-4 text-[#1a73e8] flex-shrink-0" />
+                  <span class="text-xs font-bold text-[#202124]">WebDAV 服务器连接配置</span>
+                </div>
+                <span class="text-[10px] text-[#5f6368]">（支持坚果云、Nextcloud、群晖等标准网盘）</span>
               </div>
 
               <div class="space-y-3">
@@ -2279,18 +2361,18 @@ const passwordStrength = computed(() => {
                     type="text"
                     v-model="webdavForm.url"
                     placeholder="https://dav.jianguoyun.com/dav/GoogleVault/"
-                    class="w-full px-3 py-2 bg-white focus:bg-white rounded-xl border border-[#dadce0] focus:border-[#1a73e8] text-xs outline-none font-mono"
+                    class="w-full px-3 py-2 bg-white rounded-xl border border-[#dadce0] focus:border-[#1a73e8] text-xs outline-none font-mono"
                   />
                 </div>
 
-                <div class="grid grid-cols-2 gap-3">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label class="block text-xs font-semibold text-[#5f6368] mb-1">账号 / 邮箱</label>
                     <input
                       type="text"
                       v-model="webdavForm.username"
                       placeholder="your_email@example.com"
-                      class="w-full px-3 py-2 bg-white focus:bg-white rounded-xl border border-[#dadce0] focus:border-[#1a73e8] text-xs outline-none"
+                      class="w-full px-3 py-2 bg-white rounded-xl border border-[#dadce0] focus:border-[#1a73e8] text-xs outline-none"
                     />
                   </div>
                   <div>
@@ -2298,8 +2380,8 @@ const passwordStrength = computed(() => {
                     <input
                       type="password"
                       v-model="webdavForm.password"
-                      placeholder="网盘生成的专用应用授权密码..."
-                      class="w-full px-3 py-2 bg-white focus:bg-white rounded-xl border border-[#dadce0] focus:border-[#1a73e8] text-xs outline-none font-mono"
+                      placeholder="专用应用授权密码..."
+                      class="w-full px-3 py-2 bg-white rounded-xl border border-[#dadce0] focus:border-[#1a73e8] text-xs outline-none font-mono"
                     />
                   </div>
                 </div>
@@ -2309,7 +2391,7 @@ const passwordStrength = computed(() => {
                 </div>
 
                 <!-- Test & Save buttons -->
-                <div class="flex items-center gap-2 pt-1">
+                <div class="flex flex-wrap items-center gap-2 pt-1">
                   <button
                     type="button"
                     @click="handleTestWebDav"
@@ -2331,16 +2413,16 @@ const passwordStrength = computed(() => {
             </div>
 
             <!-- Sync Actions -->
-            <div class="p-4 bg-[#f8fafd] rounded-2xl border border-[#dadce0] space-y-3">
+            <div class="p-3.5 sm:p-4 bg-[#f8fafd] rounded-2xl border border-[#dadce0] space-y-3">
               <h3 class="text-xs font-bold text-[#202124]">云端数据流转与同步操作</h3>
-              <div class="grid grid-cols-2 gap-3">
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <button
                   type="button"
                   @click="handleUploadWebDav"
                   :disabled="isWebDavSyncing"
                   class="py-2.5 px-3 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 shadow-sm transition-all disabled:opacity-50 cursor-pointer"
                 >
-                  <Upload class="w-3.5 h-3.5" />
+                  <Upload class="w-3.5 h-3.5 flex-shrink-0" />
                   <span>⬆ 上传备份至云端 (密文)</span>
                 </button>
                 <button
@@ -2349,7 +2431,7 @@ const passwordStrength = computed(() => {
                   :disabled="isWebDavSyncing"
                   class="py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 shadow-sm transition-all disabled:opacity-50 cursor-pointer"
                 >
-                  <Download class="w-3.5 h-3.5" />
+                  <Download class="w-3.5 h-3.5 flex-shrink-0" />
                   <span>⬇ 从云端恢复覆盖本地</span>
                 </button>
               </div>
@@ -2366,16 +2448,16 @@ const passwordStrength = computed(() => {
               <button
                 @click="backupTab = 'backups'"
                 :class="[
-                  'flex-1 py-1.5 rounded-lg transition-all cursor-pointer',
+                  'flex-1 py-1.5 px-2 rounded-lg transition-all cursor-pointer text-center truncate',
                   backupTab === 'backups' ? 'bg-white text-[#1a73e8] shadow-sm font-semibold' : 'text-[#5f6368] hover:text-[#202124]'
                 ]"
               >
-                历史防灾快照回滚 ({{ backupList.length }})
+                历史快照回滚 ({{ backupList.length }})
               </button>
               <button
                 @click="backupTab = 'export'"
                 :class="[
-                  'flex-1 py-1.5 rounded-lg transition-all cursor-pointer',
+                  'flex-1 py-1.5 px-2 rounded-lg transition-all cursor-pointer text-center truncate',
                   backupTab === 'export' ? 'bg-white text-[#1a73e8] shadow-sm font-semibold' : 'text-[#5f6368] hover:text-[#202124]'
                 ]"
               >
@@ -2395,17 +2477,17 @@ const passwordStrength = computed(() => {
                 v-else
                 v-for="b in backupList"
                 :key="b.filename"
-                class="p-3 bg-[#f8fafd] hover:bg-white border border-[#dadce0]/70 rounded-xl flex items-center justify-between transition-colors"
+                class="p-3 bg-[#f8fafd] hover:bg-white border border-[#dadce0]/70 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-2 transition-colors"
               >
-                <div>
+                <div class="min-w-0">
                   <div class="font-mono text-xs font-semibold text-[#202124]">{{ b.timestamp }}</div>
-                  <div class="text-[11px] text-[#80868b] mt-0.5 font-mono truncate max-w-[280px]">
+                  <div class="text-[11px] text-[#80868b] mt-0.5 font-mono truncate">
                     {{ b.filename }} ({{ (b.size_bytes / 1024).toFixed(1) }} KB)
                   </div>
                 </div>
                 <button
                   @click="handleRestoreBackup(b.filename)"
-                  class="px-3 py-1.5 bg-[#e8f0fe] hover:bg-[#d2e3fc] text-[#1a73e8] rounded-lg text-xs font-medium transition-colors cursor-pointer"
+                  class="w-full sm:w-auto px-3 py-1.5 bg-[#e8f0fe] hover:bg-[#d2e3fc] text-[#1a73e8] rounded-lg text-xs font-medium transition-colors cursor-pointer text-center whitespace-nowrap"
                 >
                   回滚此版本
                 </button>
@@ -2414,31 +2496,35 @@ const passwordStrength = computed(() => {
 
             <!-- Sub-Tab 2: Export Options -->
             <div v-else class="space-y-3 py-1">
-              <div class="p-3.5 bg-[#f8fafd] rounded-2xl border border-[#dadce0] space-y-1.5">
-                <h3 class="text-xs font-bold text-[#202124]">导出为标准 CSV 表格文件</h3>
-                <p class="text-[11px] text-[#5f6368] leading-relaxed">
-                  包含邮箱、登录密码、分组、辅助邮箱、TOTP密钥、备用验证码等全部字段，支持使用 Excel、Numbers 直接打开。
-                </p>
+              <div class="p-3.5 bg-[#f8fafd] rounded-2xl border border-[#dadce0] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div class="space-y-1">
+                  <h3 class="text-xs font-bold text-[#202124]">导出为标准 CSV 表格文件</h3>
+                  <p class="text-[11px] text-[#5f6368] leading-relaxed">
+                    包含邮箱、登录密码、分组、辅助邮箱、TOTP密钥、备用验证码等全部字段，支持 Excel/Numbers 打开。
+                  </p>
+                </div>
                 <button
                   @click="handleExportCsv"
-                  class="mt-1 px-4 py-2 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
+                  class="w-full sm:w-auto px-4 py-2 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer whitespace-nowrap flex-shrink-0"
                 >
                   <FileText class="w-3.5 h-3.5" />
-                  <span>导出 CSV 表格文件</span>
+                  <span>导出 CSV</span>
                 </button>
               </div>
 
-              <div class="p-3.5 bg-[#f8fafd] rounded-2xl border border-[#dadce0] space-y-1.5">
-                <h3 class="text-xs font-bold text-[#202124]">导出为 JSON 数据格式</h3>
-                <p class="text-[11px] text-[#5f6368] leading-relaxed">
-                  结构化明文备份，便于迁移至自建数据库、密码管理器或自行脚本解析。
-                </p>
+              <div class="p-3.5 bg-[#f8fafd] rounded-2xl border border-[#dadce0] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div class="space-y-1">
+                  <h3 class="text-xs font-bold text-[#202124]">导出为 JSON 数据格式</h3>
+                  <p class="text-[11px] text-[#5f6368] leading-relaxed">
+                    结构化明文备份，便于迁移至自建数据库、密码管理器或自行脚本解析。
+                  </p>
+                </div>
                 <button
                   @click="handleExportJson"
-                  class="mt-1 px-4 py-2 bg-white hover:bg-[#f1f3f4] text-[#3c4043] border border-[#dadce0] rounded-xl text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
+                  class="w-full sm:w-auto px-4 py-2 bg-white hover:bg-[#f1f3f4] text-[#3c4043] border border-[#dadce0] rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap flex-shrink-0"
                 >
                   <Download class="w-3.5 h-3.5 text-[#1a73e8]" />
-                  <span>导出 JSON 数据文件</span>
+                  <span>导出 JSON</span>
                 </button>
               </div>
             </div>
@@ -2446,16 +2532,16 @@ const passwordStrength = computed(() => {
 
           <!-- TAB 4: CHECK FOR UPDATES -->
           <div v-else-if="settingsTab === 'updates'" class="space-y-4">
-            <div class="p-4 bg-[#f8fafd] rounded-2xl border border-[#dadce0] space-y-3">
-              <div class="flex items-center justify-between">
-                <div class="flex items-center gap-3">
-                  <div class="w-10 h-10 rounded-xl bg-white border border-[#dadce0]/70 flex items-center justify-center text-[#1a73e8] shadow-xs">
+            <div class="p-3.5 sm:p-4 bg-[#f8fafd] rounded-2xl border border-[#dadce0] space-y-3">
+              <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div class="flex items-center gap-3 min-w-0">
+                  <div class="w-10 h-10 rounded-xl bg-white border border-[#dadce0]/70 flex items-center justify-center text-[#1a73e8] shadow-xs flex-shrink-0">
                     <RefreshCw class="w-5 h-5" />
                   </div>
-                  <div>
-                    <h3 class="text-xs font-bold text-[#202124] flex items-center gap-2">
+                  <div class="min-w-0">
+                    <h3 class="text-xs font-bold text-[#202124] flex items-center gap-2 flex-wrap">
                       <span>软件版本检查更新</span>
-                      <span class="px-2 py-0.5 rounded-full bg-[#e8f0fe] text-[#1a73e8] text-[10px] font-mono font-bold">
+                      <span class="px-2 py-0.5 rounded-full bg-[#e8f0fe] text-[#1a73e8] text-[10px] font-mono font-bold whitespace-nowrap">
                         当前: v3.0.0
                       </span>
                     </h3>
@@ -2468,7 +2554,7 @@ const passwordStrength = computed(() => {
                 <button
                   @click="checkForUpdates"
                   :disabled="isCheckingUpdate"
-                  class="px-4 py-2 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium flex items-center gap-1.5 shadow-sm transition-all disabled:opacity-50 cursor-pointer"
+                  class="w-full sm:w-auto px-4 py-2 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 shadow-sm transition-all disabled:opacity-50 cursor-pointer whitespace-nowrap flex-shrink-0"
                 >
                   <RefreshCw :class="['w-3.5 h-3.5', isCheckingUpdate ? 'animate-spin' : '']" />
                   <span>{{ isCheckingUpdate ? "正在检查..." : "立即检查更新" }}</span>
@@ -2478,7 +2564,7 @@ const passwordStrength = computed(() => {
               <!-- GitHub Repo Input -->
               <div class="pt-2 border-t border-[#dadce0]/60">
                 <label class="block text-[11px] font-semibold text-[#5f6368] mb-1">GitHub 仓库发布源 (Owner / Repo)</label>
-                <div class="flex items-center gap-2">
+                <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
                   <input
                     type="text"
                     v-model="customRepo"
@@ -2487,7 +2573,7 @@ const passwordStrength = computed(() => {
                   />
                   <button
                     @click="openExternalUrl(`https://github.com/${customRepo.trim()}/releases`)"
-                    class="px-3 py-1.5 bg-white hover:bg-[#f1f3f4] text-[#5f6368] border border-[#dadce0] rounded-xl text-xs font-medium flex items-center gap-1 transition-colors cursor-pointer"
+                    class="px-3 py-1.5 bg-white hover:bg-[#f1f3f4] text-[#5f6368] border border-[#dadce0] rounded-xl text-xs font-medium flex items-center justify-center gap-1 transition-colors cursor-pointer whitespace-nowrap flex-shrink-0"
                   >
                     <ExternalLink class="w-3.5 h-3.5" />
                     <span>查看 Release 页面</span>
@@ -2503,9 +2589,9 @@ const passwordStrength = computed(() => {
                 v-if="updateResult.has_update"
                 class="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl space-y-3"
               >
-                <div class="flex items-start justify-between">
+                <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
                   <div class="flex items-center gap-2">
-                    <Sparkles class="w-5 h-5 text-emerald-600" />
+                    <Sparkles class="w-5 h-5 text-emerald-600 flex-shrink-0" />
                     <div>
                       <h4 class="text-sm font-bold text-emerald-900">
                         发现新版本：{{ updateResult.latest_version }}
@@ -2517,7 +2603,7 @@ const passwordStrength = computed(() => {
                   </div>
                   <button
                     @click="openExternalUrl(updateResult.download_url || updateResult.release_url)"
-                    class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-all flex items-center gap-1.5 cursor-pointer"
+                    class="w-full sm:w-auto px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-all flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap flex-shrink-0"
                   >
                     <Download class="w-3.5 h-3.5" />
                     <span>前往下载更新</span>
@@ -2554,15 +2640,15 @@ const passwordStrength = computed(() => {
           <!-- TAB 5: ABOUT -->
           <div v-else-if="settingsTab === 'about'" class="space-y-4">
             <div class="p-5 bg-[#f8fafd] rounded-2xl border border-[#dadce0] flex flex-col items-center text-center space-y-3">
-              <div class="w-14 h-14 rounded-2xl bg-white p-2 border border-[#dadce0] shadow-xs overflow-hidden flex items-center justify-center">
-                <img src="/logo.png" alt="Logo" class="w-full h-full object-contain" />
+              <div class="w-16 h-16 rounded-2xl bg-white p-2.5 border border-[#dadce0] shadow-xs overflow-hidden flex items-center justify-center">
+                <img src="/app.ico" alt="Logo" class="w-full h-full object-contain" />
               </div>
               <div>
                 <h3 class="text-base font-bold text-[#202124]">Google 账号管家</h3>
-                <p class="text-xs text-[#1a73e8] font-mono font-medium mt-0.5">v3.0.0 (Rust 2.0 + Tauri 2.0 Native Edition)</p>
+                <p class="text-xs text-[#1a73e8] font-mono font-medium mt-0.5">v3.0.0 (Rust 2024 · Tauri 2.0 Native)</p>
               </div>
               <p class="text-xs text-[#5f6368] max-w-md leading-relaxed">
-                面向专业运维与个人多账号管理的高性能轻量桌面端保险库，集成 RFC 6238 2FA 动态码、Windows Hello 原生免密解锁、多隔离环境浏览器会话与 WebDAV 端到端纯密文同步。
+                面向专业运维与个人多账号管理的高性能轻量跨平台保险库，集成 RFC 6238 2FA 动态码、硬件级免密解锁（Windows Hello / 移动端生物识别）、多隔离环境浏览器会话与 WebDAV 端到端纯密文同步。
               </p>
 
               <div class="flex items-center gap-2 pt-1">
@@ -2576,14 +2662,14 @@ const passwordStrength = computed(() => {
               </div>
             </div>
 
-            <div class="grid grid-cols-2 gap-3 text-xs">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
               <div class="p-3 bg-[#f8fafd] rounded-xl border border-[#dadce0]">
                 <div class="font-bold text-[#202124]">核心架构</div>
                 <div class="text-[11px] text-[#5f6368] mt-1 font-mono">Rust 2024 · Tauri 2.0 · Vue 3.5</div>
               </div>
               <div class="p-3 bg-[#f8fafd] rounded-xl border border-[#dadce0]">
                 <div class="font-bold text-[#202124]">安全标准</div>
-                <div class="text-[11px] text-[#5f6368] mt-1 font-mono">AES-256-GCM · Scrypt · DPAPI</div>
+                <div class="text-[11px] text-[#5f6368] mt-1 font-mono">{{ isMobilePlatform ? 'AES-256-GCM · Scrypt · Keystore' : 'AES-256-GCM · Scrypt · DPAPI' }}</div>
               </div>
             </div>
           </div>
@@ -2591,10 +2677,10 @@ const passwordStrength = computed(() => {
         </div>
 
         <!-- Modal Bottom Close -->
-        <div class="px-6 py-3 border-t border-[#f1f3f4] bg-[#f8fafd] flex justify-end flex-shrink-0">
+        <div class="px-4 sm:px-6 py-3 border-t border-[#f1f3f4] bg-[#f8fafd] flex justify-end flex-shrink-0">
           <button
             @click="showSettingsModal = false"
-            class="px-5 py-2 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium transition-colors shadow-xs cursor-pointer"
+            class="w-full sm:w-auto px-5 py-2 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium transition-colors shadow-xs cursor-pointer text-center"
           >
             完成
           </button>
