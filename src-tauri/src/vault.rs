@@ -61,16 +61,51 @@ pub fn encrypt_records(records: &[AccountRecord], password: &str) -> Result<Stri
     serde_json::to_string_pretty(&envelope).map_err(|e| e.to_string())
 }
 
-pub fn decrypt_records(blob: &str, password: &str) -> Result<Vec<AccountRecord>, String> {
+pub fn encrypt_records_with_key(
+    records: &[AccountRecord],
+    key: &[u8; 32],
+    salt: &[u8; 16],
+) -> Result<String, String> {
+    let mut nonce = [0u8; 12];
+    rand::thread_rng().fill_bytes(&mut nonce);
+
+    let cipher = Aes256Gcm::new_from_slice(key).map_err(|e| e.to_string())?;
+    let raw = serde_json::to_vec(records).map_err(|e| e.to_string())?;
+
+    let payload = Payload {
+        msg: &raw,
+        aad: AAD,
+    };
+    let ciphertext = cipher
+        .encrypt(Nonce::from_slice(&nonce), payload)
+        .map_err(|e| format!("AES-GCM 加密失败: {e}"))?;
+
+    let envelope = VaultEnvelope {
+        version: 1,
+        salt: hex::encode(salt),
+        nonce: hex::encode(nonce),
+        data: base64::engine::general_purpose::STANDARD.encode(ciphertext),
+    };
+
+    serde_json::to_string_pretty(&envelope).map_err(|e| e.to_string())
+}
+
+pub fn decrypt_records(
+    blob: &str,
+    password: &str,
+) -> Result<(Vec<AccountRecord>, [u8; 32], [u8; 16]), String> {
     let envelope: VaultEnvelope =
         serde_json::from_str(blob).map_err(|e| format!("解析保险库结构失败: {e}"))?;
     if envelope.version != 1 {
         return Err("不支持的保险库文件版本".to_string());
     }
-    let salt = hex::decode(&envelope.salt).map_err(|e| format!("Salt 解码失败: {e}"))?;
-    if salt.len() != 16 {
+    let salt_vec = hex::decode(&envelope.salt).map_err(|e| format!("Salt 解码失败: {e}"))?;
+    if salt_vec.len() != 16 {
         return Err("保险库 Salt 长度不正确".to_string());
     }
+    let mut salt = [0u8; 16];
+    salt.copy_from_slice(&salt_vec);
+
     let key = derive_key(password, &salt)?;
     let nonce = hex::decode(&envelope.nonce).map_err(|e| format!("Nonce 解码失败: {e}"))?;
     let data = base64::engine::general_purpose::STANDARD
@@ -88,7 +123,7 @@ pub fn decrypt_records(blob: &str, password: &str) -> Result<Vec<AccountRecord>,
 
     let records: Vec<AccountRecord> =
         serde_json::from_slice(&decrypted).map_err(|e| format!("账号数据反序列化失败: {e}"))?;
-    Ok(records)
+    Ok((records, key, salt))
 }
 
 static VAULT_DATA_DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
@@ -114,9 +149,10 @@ pub fn vault_file_path() -> PathBuf {
     vault_data_dir().join("accounts.gvault")
 }
 
-pub fn save_vault_atomic(
+pub fn save_vault_atomic_with_key(
     records: &[AccountRecord],
-    password: &str,
+    key: &[u8; 32],
+    salt: &[u8; 16],
     keep_backups: usize,
 ) -> Result<(), String> {
     let dir = vault_data_dir();
@@ -153,12 +189,23 @@ pub fn save_vault_atomic(
         }
     }
 
-    let encrypted_content = encrypt_records(records, password)?;
+    let encrypted_content = encrypt_records_with_key(records, key, salt)?;
     let temp_path = dir.join(format!(".tmp-{}", uuid::Uuid::new_v4()));
     fs::write(&temp_path, encrypted_content.as_bytes())
         .map_err(|e| format!("写入临时文件失败: {e}"))?;
     fs::rename(&temp_path, &main_path).map_err(|e| format!("更新主库文件失败: {e}"))?;
     Ok(())
+}
+
+pub fn save_vault_atomic(
+    records: &[AccountRecord],
+    password: &str,
+    keep_backups: usize,
+) -> Result<(), String> {
+    let mut salt = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut salt);
+    let key = derive_key(password, &salt)?;
+    save_vault_atomic_with_key(records, &key, &salt, keep_backups)
 }
 
 #[cfg(test)]
@@ -178,11 +225,16 @@ mod tests {
         }];
         let password = "MyMasterPassword@2026";
         let blob = encrypt_records(&sample, password).expect("Encrypt failed");
-        let decrypted = decrypt_records(&blob, password).expect("Decrypt failed");
+        let (decrypted, key, salt) = decrypt_records(&blob, password).expect("Decrypt failed");
         assert_eq!(decrypted.len(), 1);
         assert_eq!(decrypted[0].email, "alice@gmail.com");
         assert_eq!(decrypted[0].password, "SecurePassword123!");
         assert_eq!(decrypted[0].google_one_status, "active");
+
+        // Fast key encryption test
+        let blob_fast = encrypt_records_with_key(&decrypted, &key, &salt).expect("Fast encrypt failed");
+        let (decrypted_fast, _, _) = decrypt_records(&blob_fast, password).expect("Fast decrypt failed");
+        assert_eq!(decrypted_fast.len(), 1);
 
         // Wrong password test
         let wrong = decrypt_records(&blob, "WrongPassword");

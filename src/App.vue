@@ -443,8 +443,11 @@ function openEditModal(record: AccountRecord) {
   isEditing.value = true;
 }
 
+const isSavingRecord = ref(false);
+
 async function handleSaveRecord() {
-  if (!editForm.value.email.trim()) return;
+  if (!editForm.value.email.trim() || isSavingRecord.value) return;
+  isSavingRecord.value = true;
   try {
     const saved = await invoke<AccountRecord>("save_record", { record: editForm.value });
     const idx = records.value.findIndex((r) => r.id === saved.id);
@@ -459,6 +462,8 @@ async function handleSaveRecord() {
     notify("账号信息已成功加密保存", "success");
   } catch (err: any) {
     notify("保存失败: " + err, "error");
+  } finally {
+    isSavingRecord.value = false;
   }
 }
 
@@ -1859,15 +1864,18 @@ const passwordStrength = computed(() => {
             <button
               type="button"
               @click="isEditing = false"
-              class="px-4 py-2 bg-[#f1f3f4] hover:bg-[#e8eaed] text-[#444746] rounded-xl text-xs font-medium"
+              :disabled="isSavingRecord"
+              class="px-4 py-2 bg-[#f1f3f4] hover:bg-[#e8eaed] text-[#444746] rounded-xl text-xs font-medium disabled:opacity-50"
             >
               取消
             </button>
             <button
               type="submit"
-              class="px-5 py-2 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium shadow-sm"
+              :disabled="isSavingRecord"
+              class="px-5 py-2 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium shadow-sm disabled:opacity-50 flex items-center gap-1.5"
             >
-              保存至安全库
+              <RefreshCw v-if="isSavingRecord" class="w-3.5 h-3.5 animate-spin" />
+              <span>{{ isSavingRecord ? "正在加密保存..." : "保存至安全库" }}</span>
             </button>
           </div>
         </form>

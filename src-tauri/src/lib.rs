@@ -13,6 +13,7 @@ use tauri::State;
 
 pub struct AppState {
     pub master_password: RwLock<Option<String>>,
+    pub vault_key: RwLock<Option<([u8; 32], [u8; 16])>>,
     pub records: RwLock<Vec<AccountRecord>>,
 }
 
@@ -94,9 +95,10 @@ async fn unlock_vault_with_hello(
         return Err("保险库文件不存在，请先创建保险库".to_string());
     }
     let blob = fs::read_to_string(&path).map_err(|e| format!("读取保险库文件失败: {e}"))?;
-    let records = vault::decrypt_records(&blob, &password)?;
+    let (records, key, salt) = vault::decrypt_records(&blob, &password)?;
 
     *state.master_password.write() = Some(password);
+    *state.vault_key.write() = Some((key, salt));
     *state.records.write() = records.clone();
     Ok(records)
 }
@@ -111,9 +113,10 @@ fn unlock_vault(
         return Err("保险库文件不存在，请先创建保险库".to_string());
     }
     let blob = fs::read_to_string(&path).map_err(|e| format!("读取保险库文件失败: {e}"))?;
-    let records = vault::decrypt_records(&blob, &password)?;
+    let (records, key, salt) = vault::decrypt_records(&blob, &password)?;
 
     *state.master_password.write() = Some(password);
+    *state.vault_key.write() = Some((key, salt));
     *state.records.write() = records.clone();
     Ok(records)
 }
@@ -123,9 +126,13 @@ fn create_vault(password: String, state: State<'_, AppState>) -> Result<(), Stri
     if password.trim().is_empty() {
         return Err("主密码不能为空".to_string());
     }
+    let mut salt = [0u8; 16];
+    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut salt);
+    let key = vault::derive_key(&password, &salt)?;
     let records: Vec<AccountRecord> = Vec::new();
-    vault::save_vault_atomic(&records, &password, 30)?;
+    vault::save_vault_atomic_with_key(&records, &key, &salt, 30)?;
     *state.master_password.write() = Some(password);
+    *state.vault_key.write() = Some((key, salt));
     *state.records.write() = records;
     Ok(())
 }
@@ -133,6 +140,7 @@ fn create_vault(password: String, state: State<'_, AppState>) -> Result<(), Stri
 #[tauri::command]
 fn lock_vault(state: State<'_, AppState>) -> Result<(), String> {
     *state.master_password.write() = None;
+    *state.vault_key.write() = None;
     state.records.write().clear();
     Ok(())
 }
@@ -166,7 +174,11 @@ fn save_record(
         records.push(record.clone());
     }
 
-    vault::save_vault_atomic(&records, password, 30)?;
+    if let Some((key, salt)) = state.vault_key.read().as_ref() {
+        vault::save_vault_atomic_with_key(&records, key, salt, 30)?;
+    } else {
+        vault::save_vault_atomic(&records, password, 30)?;
+    }
     Ok(record)
 }
 
@@ -180,7 +192,11 @@ fn delete_record(id: String, state: State<'_, AppState>) -> Result<(), String> {
     records.retain(|r| r.id != id);
 
     if records.len() != initial_len {
-        vault::save_vault_atomic(&records, password, 30)?;
+        if let Some((key, salt)) = state.vault_key.read().as_ref() {
+            vault::save_vault_atomic_with_key(&records, key, salt, 30)?;
+        } else {
+            vault::save_vault_atomic(&records, password, 30)?;
+        }
     }
     Ok(())
 }
@@ -604,6 +620,7 @@ use tauri::Manager;
 pub fn run() {
     let state = AppState {
         master_password: RwLock::new(None),
+        vault_key: RwLock::new(None),
         records: RwLock::new(Vec::new()),
     };
 

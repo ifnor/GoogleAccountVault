@@ -56,10 +56,10 @@ pub fn restore_backup(filename: &str, master_password: &str) -> Result<Vec<Accou
     }
 
     let blob = fs::read_to_string(&backup_path).map_err(|e| format!("读取备份失败: {e}"))?;
-    let records = vault::decrypt_records(&blob, master_password)?;
+    let (records, key, salt) = vault::decrypt_records(&blob, master_password)?;
 
     // Save as current vault
-    vault::save_vault_atomic(&records, master_password, 30)?;
+    vault::save_vault_atomic_with_key(&records, &key, &salt, 30)?;
     Ok(records)
 }
 

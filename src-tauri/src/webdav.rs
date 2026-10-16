@@ -177,9 +177,9 @@ pub async fn download_vault(
         String::from_utf8(bytes.to_vec()).map_err(|_| "云端文件不是有效的文本格式".to_string())?;
 
     // Try decrypting with master_password to verify integrity before overwriting local file
-    let records = vault::decrypt_records(&blob, master_password)?;
+    let (records, key, salt) = vault::decrypt_records(&blob, master_password)?;
 
     // Atomically save downloaded vault locally
-    vault::save_vault_atomic(&records, master_password, 30)?;
+    vault::save_vault_atomic_with_key(&records, &key, &salt, 30)?;
     Ok(records)
 }

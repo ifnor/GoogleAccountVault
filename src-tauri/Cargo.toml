@@ -51,3 +51,18 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
+
+[profile.dev.package.scrypt]
+opt-level = 3
+
+[profile.dev.package.aes-gcm]
+opt-level = 3
+
+[profile.dev.package.salsa20]
+opt-level = 3
+
+[profile.dev.package.pbkdf2]
+opt-level = 3
+
+[profile.dev.package.sha2]
+opt-level = 3
