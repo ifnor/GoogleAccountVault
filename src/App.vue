@@ -205,19 +205,6 @@ async function refreshSecurityStatus() {
   }
 }
 
-// Check vault on mount
-onMounted(async () => {
-  try {
-    vaultExists.value = await invoke<boolean>("check_vault_exists");
-  } catch (e) {
-    vaultExists.value = false;
-  }
-  await refreshSecurityStatus();
-});
-
-onUnmounted(() => {
-  if (totpTimer) clearInterval(totpTimer);
-});
 
 // Unlock / Create Vault
 async function handleAuth() {
@@ -1039,6 +1026,133 @@ const passwordStrength = computed(() => {
   return { score: 4, text: "极强 (军工级强随机)", color: "bg-emerald-500", textCol: "text-emerald-600", percent: "100%" };
 });
 
+// Hardware & Gesture Back Navigation (Android Back Button / Back Gesture & Desktop Esc)
+let lastBackPressTime = 0;
+let backButtonListener: { unregister: () => Promise<void> } | null = null;
+
+function handleBackAction(): boolean {
+  // 1. Confirm dialog
+  if (confirmState.value.visible) {
+    confirmState.value.resolve(false);
+    return true;
+  }
+
+  // 2. Settings modal
+  if (showSettingsModal.value) {
+    showSettingsModal.value = false;
+    return true;
+  }
+
+  // 3. Password generator modal
+  if (showPasswordGenModal.value) {
+    showPasswordGenModal.value = false;
+    return true;
+  }
+
+  // 4. Batch import modal
+  if (showBatchImportModal.value) {
+    showBatchImportModal.value = false;
+    return true;
+  }
+
+  // 5. Custom URL shortcut modal
+  if (showCustomUrlModal.value) {
+    showCustomUrlModal.value = false;
+    return true;
+  }
+
+  // 6. Backup codes modal
+  if (showBackupCodesModal.value) {
+    if (isEditingBackupCodesRaw.value) {
+      isEditingBackupCodesRaw.value = false;
+    } else {
+      showBackupCodesModal.value = false;
+    }
+    return true;
+  }
+
+  // 7. Account add/edit modal
+  if (isEditing.value) {
+    isEditing.value = false;
+    return true;
+  }
+
+  // 8. Mobile dropdown menu
+  if (showMobileMoreMenu.value) {
+    showMobileMoreMenu.value = false;
+    return true;
+  }
+
+  // 9. Mobile search expanded
+  if (showMobileSearch.value || searchQuery.value) {
+    showMobileSearch.value = false;
+    searchQuery.value = "";
+    return true;
+  }
+
+  // 10. Mobile detail view -> return to account list
+  if (mobileView.value === "detail") {
+    mobileView.value = "list";
+    return true;
+  }
+
+  return false;
+}
+
+function handleKeyDown(e: KeyboardEvent) {
+  if (e.key === "Escape") {
+    handleBackAction();
+  }
+}
+
+async function setupBackNavigation() {
+  if (typeof window !== "undefined") {
+    window.addEventListener("keydown", handleKeyDown);
+  }
+
+  try {
+    const { onBackButtonPress, exit } = await import("@tauri-apps/api/app");
+    backButtonListener = await onBackButtonPress(async () => {
+      const handled = handleBackAction();
+      if (!handled) {
+        const now = Date.now();
+        if (now - lastBackPressTime < 2000) {
+          try {
+            await exit(0);
+          } catch (e) {
+            console.warn("Failed to exit app:", e);
+          }
+        } else {
+          lastBackPressTime = now;
+          notify("再按一次退出应用", "info", 2000);
+        }
+      }
+    });
+  } catch (err) {
+    console.warn("Android back button registration not supported or failed on this platform:", err);
+  }
+}
+
+// Lifecycle Hooks
+onMounted(async () => {
+  try {
+    vaultExists.value = await invoke<boolean>("check_vault_exists");
+  } catch (e) {
+    vaultExists.value = false;
+  }
+  await refreshSecurityStatus();
+  await setupBackNavigation();
+});
+
+onUnmounted(() => {
+  if (totpTimer) clearInterval(totpTimer);
+  if (typeof window !== "undefined") {
+    window.removeEventListener("keydown", handleKeyDown);
+  }
+  if (backButtonListener) {
+    backButtonListener.unregister().catch(() => {});
+  }
+});
 </script>
 
 <template>
