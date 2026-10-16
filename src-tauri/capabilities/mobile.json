@@ -5,9 +5,13 @@
     "iOS"
   ],
   "windows": [
-    "main"
+    "main",
+    "*"
   ],
   "permissions": [
-    "biometric:default"
+    "biometric:default",
+    "biometric:allow-biometric-cipher",
+    "biometric:allow-authenticate",
+    "biometric:allow-status"
   ]
 }
