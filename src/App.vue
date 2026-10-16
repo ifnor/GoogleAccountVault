@@ -33,6 +33,8 @@ import {
   FileText,
   Fingerprint,
   Settings,
+  ChevronLeft,
+  MoreVertical,
   X
 } from "lucide-vue-next";
 
@@ -69,6 +71,16 @@ const records = ref<AccountRecord[]>([]);
 const selectedId = ref<string | null>(null);
 const searchQuery = ref("");
 const currentGroup = ref<string | null>(null);
+
+// Responsive Mobile View States
+const mobileView = ref<"list" | "detail">("list");
+const showMobileSearch = ref(false);
+const showMobileMoreMenu = ref(false);
+
+function selectAccount(id: string) {
+  selectedId.value = id;
+  mobileView.value = "detail";
+}
 
 // TOTP Cache & Timer
 const totpMap = ref<Record<string, TotpResult>>({});
@@ -241,6 +253,9 @@ async function lockVault() {
   masterPassword.value = "";
   records.value = [];
   selectedId.value = null;
+  mobileView.value = "list";
+  showMobileMoreMenu.value = false;
+  showMobileSearch.value = false;
   if (totpTimer) clearInterval(totpTimer);
   try {
     helloStatus.value = await invoke<{ available: boolean; enrolled: boolean }>("check_windows_hello_status");
@@ -383,6 +398,7 @@ async function handleDeleteRecord(id: string) {
     records.value = records.value.filter((r) => r.id !== id);
     if (selectedId.value === id) {
       selectedId.value = records.value[0]?.id || null;
+      mobileView.value = "list";
     }
     notify("账号记录已安全删除", "info");
   } catch (err: any) {
@@ -943,7 +959,7 @@ const passwordStrength = computed(() => {
 </script>
 
 <template>
-  <div class="h-screen w-screen flex flex-col bg-[#f8fafd] select-none text-[#1f1f1f] font-sans antialiased overflow-hidden">
+  <div class="h-screen w-screen flex flex-col bg-[#f8fafd] select-none text-[#1f1f1f] font-sans antialiased overflow-hidden pt-[env(safe-area-inset-top,0px)] pb-[env(safe-area-inset-bottom,0px)]">
     
     <!-- 1. LOCK / UNLOCK SCREEN -->
     <div v-if="!isUnlocked" class="flex-1 flex items-center justify-center p-6 relative">
@@ -1021,8 +1037,8 @@ const passwordStrength = computed(() => {
 
     <!-- 2. MAIN APPLICATION WORKSPACE -->
     <template v-else>
-      <!-- HEADER TOOLBAR -->
-      <header class="h-14 bg-white border-b border-[#dadce0] px-4 flex items-center justify-between gap-4 flex-shrink-0 z-10">
+      <!-- 2.1 DESKTOP HEADER (md and above) -->
+      <header class="hidden md:flex h-14 bg-white border-b border-[#dadce0] px-4 items-center justify-between gap-4 flex-shrink-0 z-10">
         <!-- Brand -->
         <div class="flex items-center gap-3">
           <div class="w-8 h-8 rounded-lg bg-white border border-[#dadce0]/60 flex items-center justify-center p-0.5 overflow-hidden shadow-xs">
@@ -1046,7 +1062,7 @@ const passwordStrength = computed(() => {
           <button
             v-if="searchQuery"
             @click="searchQuery = ''"
-            class="absolute right-3 top-1/2 -translate-y-1/2 text-[#5f6368] hover:text-[#202124]"
+            class="absolute right-3 top-1/2 -translate-y-1/2 text-[#5f6368] hover:text-[#202124] cursor-pointer"
           >
             <X class="w-3.5 h-3.5" />
           </button>
@@ -1056,7 +1072,7 @@ const passwordStrength = computed(() => {
         <div class="flex items-center gap-2">
           <button
             @click="openAddModal"
-            class="h-9 px-3.5 bg-[#1a73e8] hover:bg-[#1557b0] active:bg-[#174ea6] text-white rounded-full text-xs font-medium flex items-center gap-1.5 shadow-sm transition-all"
+            class="h-9 px-3.5 bg-[#1a73e8] hover:bg-[#1557b0] active:bg-[#174ea6] text-white rounded-full text-xs font-medium flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
           >
             <Plus class="w-4 h-4" />
             <span>添加账号</span>
@@ -1064,7 +1080,7 @@ const passwordStrength = computed(() => {
 
           <button
             @click="openPasswordGenModal"
-            class="h-9 px-3 bg-[#f1f3f4] hover:bg-[#e8eaed] text-[#3c4043] rounded-full text-xs font-medium flex items-center gap-1.5 transition-all"
+            class="h-9 px-3 bg-[#f1f3f4] hover:bg-[#e8eaed] text-[#3c4043] rounded-full text-xs font-medium flex items-center gap-1.5 transition-all cursor-pointer"
             title="强随机密码生成器"
           >
             <KeyRound class="w-3.5 h-3.5 text-[#1a73e8]" />
@@ -1073,7 +1089,7 @@ const passwordStrength = computed(() => {
 
           <button
             @click="openBatchImportModal"
-            class="h-9 px-3 bg-[#f1f3f4] hover:bg-[#e8eaed] text-[#3c4043] rounded-full text-xs font-medium flex items-center gap-1.5 transition-all"
+            class="h-9 px-3 bg-[#f1f3f4] hover:bg-[#e8eaed] text-[#3c4043] rounded-full text-xs font-medium flex items-center gap-1.5 transition-all cursor-pointer"
             title="批量导入多条账号"
           >
             <Upload class="w-3.5 h-3.5 text-[#1a73e8]" />
@@ -1083,7 +1099,7 @@ const passwordStrength = computed(() => {
           <!-- Unified Settings Button -->
           <button
             @click="openSettingsModal('security')"
-            class="h-9 px-3.5 bg-[#f1f3f4] hover:bg-[#e8eaed] text-[#3c4043] rounded-full text-xs font-medium flex items-center gap-1.5 transition-all relative"
+            class="h-9 px-3.5 bg-[#f1f3f4] hover:bg-[#e8eaed] text-[#3c4043] rounded-full text-xs font-medium flex items-center gap-1.5 transition-all relative cursor-pointer"
             title="设置与偏好 (Windows Hello、云端同步、备份导出、检查更新)"
           >
             <Settings class="w-3.5 h-3.5 text-[#1a73e8]" />
@@ -1093,7 +1109,7 @@ const passwordStrength = computed(() => {
 
           <button
             @click="lockVault"
-            class="h-9 px-3 bg-[#f1f3f4] hover:bg-[#e8eaed] text-[#3c4043] rounded-full text-xs font-medium flex items-center gap-1.5 transition-all"
+            class="h-9 px-3 bg-[#f1f3f4] hover:bg-[#e8eaed] text-[#3c4043] rounded-full text-xs font-medium flex items-center gap-1.5 transition-all cursor-pointer"
             title="锁定保险库"
           >
             <Lock class="w-3.5 h-3.5" />
@@ -1102,11 +1118,136 @@ const passwordStrength = computed(() => {
         </div>
       </header>
 
+      <!-- 2.2 MOBILE HEADER (< md) -->
+      <header class="md:hidden bg-white border-b border-[#dadce0] flex flex-col flex-shrink-0 z-20">
+        <!-- Mobile Main Nav Row -->
+        <div class="h-13 px-3.5 flex items-center justify-between gap-2">
+          <!-- Left: Brand -->
+          <div class="flex items-center gap-2 min-w-0">
+            <div class="w-7 h-7 rounded-lg bg-white border border-[#dadce0]/60 flex items-center justify-center p-0.5 overflow-hidden shadow-2xs flex-shrink-0">
+              <img src="/logo.png" alt="Logo" class="w-full h-full object-contain" />
+            </div>
+            <span class="font-bold text-sm text-[#202124] tracking-tight whitespace-nowrap">Google 账号管家</span>
+          </div>
+
+          <!-- Right: Mobile Action Buttons -->
+          <div class="flex items-center gap-1 flex-shrink-0">
+            <!-- Search Toggle Button -->
+            <button
+              @click="showMobileSearch = !showMobileSearch"
+              class="w-8 h-8 rounded-full flex items-center justify-center text-[#5f6368] hover:bg-[#f1f3f4] active:bg-[#e8eaed] transition-colors cursor-pointer"
+              :class="{ 'bg-[#e8f0fe] text-[#1a73e8]': showMobileSearch || searchQuery }"
+              title="搜索"
+            >
+              <Search class="w-4 h-4" />
+            </button>
+
+            <!-- Quick Add Button -->
+            <button
+              @click="openAddModal"
+              class="h-8 px-2.5 bg-[#1a73e8] text-white rounded-full text-xs font-semibold flex items-center gap-1 shadow-xs active:bg-[#1557b0] transition-colors cursor-pointer"
+              title="添加新账号"
+            >
+              <Plus class="w-3.5 h-3.5" />
+              <span>添加</span>
+            </button>
+
+            <!-- Settings Button -->
+            <button
+              @click="openSettingsModal('security')"
+              class="w-8 h-8 rounded-full flex items-center justify-center text-[#5f6368] hover:bg-[#f1f3f4] active:bg-[#e8eaed] transition-colors relative cursor-pointer"
+              title="设置"
+            >
+              <Settings class="w-4 h-4 text-[#1a73e8]" />
+              <span v-if="helloStatus.enrolled" class="w-1.5 h-1.5 rounded-full bg-emerald-500 absolute top-1.5 right-1.5"></span>
+            </button>
+
+            <!-- More Actions Dropdown Toggle -->
+            <div class="relative">
+              <button
+                @click="showMobileMoreMenu = !showMobileMoreMenu"
+                class="w-8 h-8 rounded-full flex items-center justify-center text-[#5f6368] hover:bg-[#f1f3f4] active:bg-[#e8eaed] transition-colors cursor-pointer"
+                title="更多菜单"
+              >
+                <MoreVertical class="w-4 h-4" />
+              </button>
+
+              <!-- More Actions Dropdown Menu -->
+              <div
+                v-if="showMobileMoreMenu"
+                class="absolute right-0 top-10 w-44 bg-white rounded-2xl shadow-xl border border-[#dadce0] p-1.5 z-50 text-xs font-medium space-y-0.5 animate-fade-in"
+              >
+                <button
+                  @click="showMobileMoreMenu = false; openPasswordGenModal()"
+                  class="w-full px-3 py-2 text-left hover:bg-[#f1f3f4] rounded-xl flex items-center gap-2 text-[#3c4043] cursor-pointer"
+                >
+                  <KeyRound class="w-3.5 h-3.5 text-[#1a73e8]" />
+                  <span>密码生成器</span>
+                </button>
+                <button
+                  @click="showMobileMoreMenu = false; openBatchImportModal()"
+                  class="w-full px-3 py-2 text-left hover:bg-[#f1f3f4] rounded-xl flex items-center gap-2 text-[#3c4043] cursor-pointer"
+                >
+                  <Upload class="w-3.5 h-3.5 text-[#1a73e8]" />
+                  <span>批量导入</span>
+                </button>
+                <div class="border-t border-[#f1f3f4] my-1"></div>
+                <button
+                  @click="showMobileMoreMenu = false; lockVault()"
+                  class="w-full px-3 py-2 text-left hover:bg-rose-50 text-rose-600 rounded-xl flex items-center gap-2 cursor-pointer"
+                >
+                  <Lock class="w-3.5 h-3.5" />
+                  <span>锁定保险库</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Mobile Search Input Row (collapsible) -->
+        <div v-if="showMobileSearch || searchQuery" class="px-3 pb-2 pt-0 flex items-center gap-2">
+          <div class="flex-1 relative">
+            <Search class="w-3.5 h-3.5 text-[#5f6368] absolute left-3 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              v-model="searchQuery"
+              placeholder="搜索邮箱、分组或备注..."
+              class="w-full pl-8 pr-7 py-1.5 bg-[#f1f3f4] focus:bg-white rounded-xl border border-transparent focus:border-[#1a73e8] outline-none text-xs text-[#202124]"
+            />
+            <button
+              v-if="searchQuery"
+              @click="searchQuery = ''"
+              class="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#5f6368] cursor-pointer"
+            >
+              <X class="w-3 h-3" />
+            </button>
+          </div>
+        </div>
+
+        <!-- Mobile Horizontal Group Selector Pills -->
+        <div class="flex items-center gap-1.5 px-3 py-1.5 bg-[#f8fafd] border-t border-[#dadce0]/60 overflow-x-auto no-scrollbar flex-shrink-0">
+          <button
+            v-for="g in groups"
+            :key="g.label"
+            @click="currentGroup = g.key; mobileView = 'list'"
+            :class="[
+              'px-2.5 py-1 rounded-full text-xs whitespace-nowrap flex items-center gap-1 transition-all flex-shrink-0 font-medium cursor-pointer',
+              currentGroup === g.key
+                ? 'bg-[#1a73e8] text-white font-semibold shadow-2xs'
+                : 'bg-white text-[#5f6368] border border-[#dadce0] hover:bg-[#f1f3f4]'
+            ]"
+          >
+            <span>{{ g.label }}</span>
+            <span class="text-[10px] opacity-80 font-mono">({{ g.count }})</span>
+          </button>
+        </div>
+      </header>
+
       <!-- THREE-COLUMN MAIN BODY -->
-      <div class="flex-1 flex overflow-hidden">
+      <div class="flex-1 flex overflow-hidden relative">
         
-        <!-- COLUMN 1: SIDEBAR (GROUPS & STATS) -->
-        <aside class="w-56 bg-white border-r border-[#dadce0] flex flex-col flex-shrink-0">
+        <!-- COLUMN 1: SIDEBAR (Desktop only) -->
+        <aside class="hidden md:flex w-56 bg-white border-r border-[#dadce0] flex-col flex-shrink-0">
           <div class="px-4 py-3 border-b border-[#f1f3f4]">
             <h2 class="text-[11px] font-bold text-[#5f6368] uppercase tracking-wider">账号分组</h2>
           </div>
@@ -1141,17 +1282,23 @@ const passwordStrength = computed(() => {
         </aside>
 
         <!-- COLUMN 2: MIDDLE ACCOUNT LIST -->
-        <main class="flex-1 bg-white border-r border-[#dadce0] flex flex-col overflow-hidden">
+        <main
+          class="bg-white border-r border-[#dadce0] flex flex-col overflow-hidden"
+          :class="[
+            mobileView === 'detail' ? 'hidden md:flex' : 'flex flex-1 w-full',
+            'md:flex md:flex-1'
+          ]"
+        >
           <div class="px-4 py-2 bg-[#f8fafd] border-b border-[#dadce0] flex items-center justify-between text-xs text-[#5f6368]">
             <span>共 {{ filteredRecords.length }} 个账号符合筛选</span>
-            <span class="text-[11px] text-[#80868b]">双击可快速编辑详情</span>
+            <span class="text-[11px] text-[#80868b] hidden md:inline">双击可快速编辑详情</span>
           </div>
 
           <div class="flex-1 overflow-y-auto divide-y divide-[#f1f3f4]">
             <div
               v-for="r in filteredRecords"
               :key="r.id"
-              @click="selectedId = r.id"
+              @click="selectAccount(r.id)"
               @dblclick="openEditModal(r)"
               :class="[
                 'px-4 py-3 flex items-center justify-between cursor-pointer transition-colors',
@@ -1173,14 +1320,14 @@ const passwordStrength = computed(() => {
               </div>
 
               <!-- Right: TOTP & One Badge -->
-              <div class="flex items-center gap-4 flex-shrink-0">
+              <div class="flex items-center gap-2 md:gap-4 flex-shrink-0">
                 <!-- 2FA Code Badge -->
                 <div v-if="r.totp" class="flex flex-col items-end">
                   <div class="flex items-center gap-1.5 font-mono text-sm font-bold text-[#1a73e8]">
                     <span>{{ totpMap[r.id]?.code || "••••••" }}</span>
                     <button
                       @click.stop="copyText(totpMap[r.id]?.code || '', r.id + '-totp')"
-                      class="text-[#5f6368] hover:text-[#1a73e8]"
+                      class="text-[#5f6368] hover:text-[#1a73e8] cursor-pointer"
                       title="复制动态验证码"
                     >
                       <Check v-if="copiedField === r.id + '-totp'" class="w-3.5 h-3.5 text-emerald-600" />
@@ -1189,7 +1336,7 @@ const passwordStrength = computed(() => {
                   </div>
                   <span class="text-[10px] text-[#80868b] font-mono">{{ totpMap[r.id]?.remaining_seconds || 30 }}s 剩余</span>
                 </div>
-                <div v-else class="text-[11px] text-[#9aa0a6] font-mono">未配 2FA</div>
+                <div v-else class="text-[11px] text-[#9aa0a6] font-mono hidden sm:block">未配 2FA</div>
 
                 <!-- Google One Badge -->
                 <div
@@ -1206,13 +1353,13 @@ const passwordStrength = computed(() => {
                 </div>
                 <div
                   v-else-if="r.google_one_status === 'inactive'"
-                  class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-600"
+                  class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-600 hidden sm:block"
                 >
                   非会员
                 </div>
                 <div
                   v-else
-                  class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-[#f1f3f4] text-[#5f6368]"
+                  class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-[#f1f3f4] text-[#5f6368] hidden sm:block"
                 >
                   未验证
                 </div>
@@ -1223,11 +1370,51 @@ const passwordStrength = computed(() => {
               暂无匹配的账号记录
             </div>
           </div>
+
+          <!-- Mobile Bottom Summary Bar -->
+          <div class="md:hidden px-4 py-2.5 bg-[#f8fafd] border-t border-[#dadce0] text-[11px] text-[#5f6368] flex items-center justify-between flex-shrink-0">
+            <span>已保存 <strong>{{ records.length }}</strong> 个账号</span>
+            <span class="text-[10px] text-[#80868b]">AES-256-GCM 本地加密就绪</span>
+          </div>
         </main>
 
         <!-- COLUMN 3: RIGHT DETAIL CARD -->
-        <aside class="w-96 bg-[#f8fafd] flex flex-col flex-shrink-0 overflow-y-auto p-4 gap-4">
+        <aside
+          class="bg-[#f8fafd] flex flex-col overflow-y-auto p-3 md:p-4 gap-3 md:gap-4 flex-shrink-0"
+          :class="[
+            mobileView === 'detail' ? 'flex flex-1 w-full' : 'hidden md:flex md:w-96',
+            'md:flex md:w-96'
+          ]"
+        >
           <template v-if="selectedRecord">
+            <!-- Mobile Back Navigation Header -->
+            <div class="md:hidden flex items-center justify-between pb-2 border-b border-[#dadce0]/70 flex-shrink-0">
+              <button
+                @click="mobileView = 'list'"
+                class="px-3 py-1.5 bg-white active:bg-[#f1f3f4] text-[#1a73e8] border border-[#dadce0] rounded-xl text-xs font-semibold flex items-center gap-1 transition-colors shadow-2xs cursor-pointer"
+              >
+                <ChevronLeft class="w-4 h-4" />
+                <span>返回账号列表</span>
+              </button>
+
+              <div class="flex items-center gap-1.5">
+                <button
+                  @click="openEditModal(selectedRecord)"
+                  class="px-2.5 py-1.5 bg-white text-[#5f6368] hover:text-[#1a73e8] border border-[#dadce0] rounded-xl text-xs font-medium flex items-center gap-1 cursor-pointer"
+                >
+                  <Edit3 class="w-3.5 h-3.5 text-[#1a73e8]" />
+                  <span>编辑</span>
+                </button>
+                <button
+                  @click="handleDeleteRecord(selectedRecord.id)"
+                  class="px-2.5 py-1.5 bg-white text-rose-600 border border-[#dadce0] rounded-xl text-xs font-medium flex items-center gap-1 cursor-pointer"
+                >
+                  <Trash2 class="w-3.5 h-3.5" />
+                  <span>删除</span>
+                </button>
+              </div>
+            </div>
+
             <!-- Account Header Card -->
             <div class="bg-white rounded-2xl p-4 border border-[#dadce0]/80 shadow-sm">
               <div class="flex items-center gap-3 mb-3">
