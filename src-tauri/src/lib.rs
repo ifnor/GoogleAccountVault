@@ -580,9 +580,14 @@ async fn check_github_update(repo: Option<String>) -> Result<UpdateInfo, String>
 
     let mut download_url = None;
     if let Some(assets) = json["assets"].as_array() {
+        #[cfg(target_os = "android")]
+        let target_ext = ".apk";
+        #[cfg(not(target_os = "android"))]
+        let target_ext = ".exe";
+
         for asset in assets {
             if let Some(asset_name) = asset["name"].as_str() {
-                if asset_name.ends_with(".exe") {
+                if asset_name.ends_with(target_ext) {
                     download_url = asset["browser_download_url"]
                         .as_str()
                         .map(|s| s.to_string());
