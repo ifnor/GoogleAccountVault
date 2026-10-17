@@ -82,6 +82,48 @@ function selectAccount(id: string) {
   mobileView.value = "detail";
 }
 
+// Detail Panel Width & Resizing (Desktop)
+const detailWidth = ref<number>(
+  Math.max(280, Math.min(500, Number(localStorage.getItem("vault_detail_panel_width") || 340)))
+);
+const isResizingDetail = ref(false);
+const isDesktopWindow = ref(typeof window !== "undefined" ? window.innerWidth >= 768 : true);
+
+function updateWindowWidth() {
+  if (typeof window !== "undefined") {
+    isDesktopWindow.value = window.innerWidth >= 768;
+  }
+}
+
+function startResizeDetail(e: MouseEvent) {
+  e.preventDefault();
+  isResizingDetail.value = true;
+  const startX = e.clientX;
+  const startWidth = detailWidth.value;
+
+  function onMouseMove(moveEvent: MouseEvent) {
+    const delta = startX - moveEvent.clientX;
+    const newWidth = Math.max(280, Math.min(500, startWidth + delta));
+    detailWidth.value = newWidth;
+  }
+
+  function onMouseUp() {
+    isResizingDetail.value = false;
+    localStorage.setItem("vault_detail_panel_width", String(detailWidth.value));
+    window.removeEventListener("mousemove", onMouseMove);
+    window.removeEventListener("mouseup", onMouseUp);
+  }
+
+  window.addEventListener("mousemove", onMouseMove);
+  window.addEventListener("mouseup", onMouseUp);
+}
+
+function resetDetailWidth() {
+  detailWidth.value = 340;
+  localStorage.setItem("vault_detail_panel_width", "340");
+}
+
+
 // TOTP Cache & Timer
 const totpMap = ref<Record<string, TotpResult>>({});
 let totpTimer: number | null = null;
@@ -1142,12 +1184,17 @@ onMounted(async () => {
   }
   await refreshSecurityStatus();
   await setupBackNavigation();
+  if (typeof window !== "undefined") {
+    window.addEventListener("resize", updateWindowWidth);
+    updateWindowWidth();
+  }
 });
 
 onUnmounted(() => {
   if (totpTimer) clearInterval(totpTimer);
   if (typeof window !== "undefined") {
     window.removeEventListener("keydown", handleKeyDown);
+    window.removeEventListener("resize", updateWindowWidth);
   }
   if (backButtonListener) {
     backButtonListener.unregister().catch(() => {});
@@ -1575,13 +1622,26 @@ onUnmounted(() => {
           </div>
         </main>
 
+        <!-- Resizer Divider (Desktop only) -->
+        <div
+          v-if="selectedRecord"
+          class="hidden md:flex items-center justify-center w-1 hover:w-1.5 bg-[#dadce0]/40 hover:bg-[#1a73e8]/40 active:bg-[#1a73e8] cursor-col-resize transition-all select-none z-10 -ml-0.5"
+          :class="{ 'bg-[#1a73e8] w-1.5': isResizingDetail }"
+          @mousedown="startResizeDetail"
+          @dblclick="resetDetailWidth"
+          title="按住鼠标左右拖拽调整详情栏宽度，双击恢复默认宽度"
+        >
+          <div class="w-0.5 h-6 bg-[#dadce0] rounded-full"></div>
+        </div>
+
         <!-- COLUMN 3: RIGHT DETAIL CARD -->
         <aside
-          class="bg-[#f8fafd] flex flex-col overflow-y-auto p-3 md:p-4 gap-3 md:gap-4 flex-shrink-0"
+          class="bg-[#f8fafd] flex flex-col overflow-y-auto p-3 gap-2.5 border-l border-[#dadce0]/70 flex-shrink-0"
           :class="[
-            mobileView === 'detail' ? 'flex flex-1 w-full' : 'hidden md:flex md:w-96',
-            'md:flex md:w-96'
+            mobileView === 'detail' ? 'flex flex-1 w-full' : 'hidden md:flex',
+            'md:flex md:flex-none'
           ]"
+          :style="isDesktopWindow && !isMobilePlatform ? { width: `${detailWidth}px` } : {}"
         >
           <template v-if="selectedRecord">
             <!-- Mobile Back Navigation Header -->
@@ -1613,149 +1673,149 @@ onUnmounted(() => {
             </div>
 
             <!-- Account Header Card -->
-            <div class="bg-white rounded-2xl p-4 border border-[#dadce0]/80 shadow-sm">
-              <div class="flex items-center gap-3 mb-3">
-                <div class="w-12 h-12 rounded-full bg-[#e8f0fe] text-[#1a73e8] font-bold text-lg flex items-center justify-center flex-shrink-0">
+            <div class="bg-white rounded-2xl p-3 border border-[#dadce0]/80 shadow-2xs">
+              <div class="flex items-center gap-2.5 mb-2.5">
+                <div class="w-9 h-9 rounded-full bg-[#e8f0fe] text-[#1a73e8] font-bold text-base flex items-center justify-center flex-shrink-0">
                   {{ (selectedRecord.email[0] || 'G').toUpperCase() }}
                 </div>
                 <div class="min-w-0 flex-1">
-                  <div class="text-xs text-[#5f6368]">Google 账号</div>
-                  <div class="text-sm font-bold text-[#202124] truncate">{{ selectedRecord.email }}</div>
+                  <div class="text-[11px] text-[#5f6368]">Google 账号</div>
+                  <div class="text-xs font-bold text-[#202124] truncate" :title="selectedRecord.email">{{ selectedRecord.email }}</div>
                 </div>
               </div>
 
               <!-- Quick Launch Buttons (Shape A: In-App Isolated Windows) -->
-              <div class="grid grid-cols-3 gap-2">
+              <div class="grid grid-cols-3 gap-1.5">
                 <button
                   @click="openInApp(`https://accounts.google.com/ServiceLogin?Email=${encodeURIComponent(selectedRecord.email)}&login_hint=${encodeURIComponent(selectedRecord.email)}&continue=${encodeURIComponent('https://myaccount.google.com/')}`)"
                   :disabled="isOpeningBrowser"
-                  class="h-8 px-2 bg-[#f1f3f4] hover:bg-[#e8eaed] active:bg-[#e2e5e9] text-[#3c4043] rounded-lg text-xs font-medium flex items-center justify-center gap-1 transition-all disabled:opacity-50"
+                  class="h-7 px-1.5 bg-[#f1f3f4] hover:bg-[#e8eaed] active:bg-[#e2e5e9] text-[#3c4043] rounded-lg text-[11px] font-medium flex items-center justify-center gap-1 transition-all disabled:opacity-50 cursor-pointer"
                   title="在专属独立会话窗口中登录此账号"
                 >
-                  <ExternalLink class="w-3.5 h-3.5 text-[#1a73e8]" />
+                  <ExternalLink class="w-3 h-3 text-[#1a73e8]" />
                   <span>快捷登录</span>
                 </button>
                 <button
                   @click="openInApp('https://one.google.com/storage')"
                   :disabled="isOpeningBrowser"
-                  class="h-8 px-2 bg-[#f1f3f4] hover:bg-[#e8eaed] active:bg-[#e2e5e9] text-[#3c4043] rounded-lg text-xs font-medium flex items-center justify-center gap-1 transition-all disabled:opacity-50"
+                  class="h-7 px-1.5 bg-[#f1f3f4] hover:bg-[#e8eaed] active:bg-[#e2e5e9] text-[#3c4043] rounded-lg text-[11px] font-medium flex items-center justify-center gap-1 transition-all disabled:opacity-50 cursor-pointer"
                   title="在专属独立会话窗口中打开 Google One"
                 >
-                  <Globe class="w-3.5 h-3.5 text-[#1a73e8]" />
+                  <Globe class="w-3 h-3 text-[#1a73e8]" />
                   <span>One 方案</span>
                 </button>
                 <button
                   @click="openInApp('https://policies.google.com/terms')"
                   :disabled="isOpeningBrowser"
-                  class="h-8 px-2 bg-[#f1f3f4] hover:bg-[#e8eaed] active:bg-[#e2e5e9] text-[#3c4043] rounded-lg text-xs font-medium flex items-center justify-center gap-1 transition-all disabled:opacity-50"
+                  class="h-7 px-1.5 bg-[#f1f3f4] hover:bg-[#e8eaed] active:bg-[#e2e5e9] text-[#3c4043] rounded-lg text-[11px] font-medium flex items-center justify-center gap-1 transition-all disabled:opacity-50 cursor-pointer"
                   title="在专属独立会话窗口中查看注册归属地区"
                 >
-                  <Info class="w-3.5 h-3.5 text-[#1a73e8]" />
+                  <Info class="w-3 h-3 text-[#1a73e8]" />
                   <span>归属地区</span>
                 </button>
                 <button
                   @click="openInApp('https://payments.google.com/gp/w/home/settings')"
                   :disabled="isOpeningBrowser"
-                  class="h-8 px-2 bg-[#f1f3f4] hover:bg-[#e8eaed] active:bg-[#e2e5e9] text-[#3c4043] rounded-lg text-xs font-medium flex items-center justify-center gap-1 transition-all col-span-2 disabled:opacity-50"
+                  class="h-7 px-1.5 bg-[#f1f3f4] hover:bg-[#e8eaed] active:bg-[#e2e5e9] text-[#3c4043] rounded-lg text-[11px] font-medium flex items-center justify-center gap-1 transition-all col-span-2 disabled:opacity-50 cursor-pointer"
                   title="在专属独立会话窗口中打开支付与账单"
                 >
-                  <CreditCard class="w-3.5 h-3.5 text-[#1a73e8]" />
+                  <CreditCard class="w-3 h-3 text-[#1a73e8]" />
                   <span>支付设置与账单</span>
                 </button>
                 <button
                   @click="openCustomUrlModal"
-                  class="h-8 px-2 bg-[#f1f3f4] hover:bg-[#e8eaed] active:bg-[#e2e5e9] text-[#3c4043] rounded-lg text-xs font-medium flex items-center justify-center gap-1 transition-all"
+                  class="h-7 px-1.5 bg-[#f1f3f4] hover:bg-[#e8eaed] active:bg-[#e2e5e9] text-[#3c4043] rounded-lg text-[11px] font-medium flex items-center justify-center gap-1 transition-all cursor-pointer"
                   title="在独立窗口中打开其他服务或自定义网址"
                 >
-                  <Compass class="w-3.5 h-3.5 text-[#1a73e8]" />
+                  <Compass class="w-3 h-3 text-[#1a73e8]" />
                   <span>更多网址</span>
                 </button>
                 <button
                   v-if="selectedRecord.recovery_email"
                   @click="copyText(selectedRecord.recovery_email, 'rec_email')"
-                  class="h-8 px-2 bg-[#f1f3f4] hover:bg-[#e8eaed] active:bg-[#e2e5e9] text-[#3c4043] rounded-lg text-xs font-medium flex items-center justify-center gap-1 transition-all col-span-3 truncate"
+                  class="h-7 px-2 bg-[#f1f3f4] hover:bg-[#e8eaed] active:bg-[#e2e5e9] text-[#3c4043] rounded-lg text-[11px] font-medium flex items-center justify-center gap-1 transition-all col-span-3 truncate cursor-pointer"
                 >
-                  <Copy class="w-3.5 h-3.5 flex-shrink-0" />
+                  <Copy class="w-3 h-3 flex-shrink-0" />
                   <span class="truncate">{{ copiedField === 'rec_email' ? '已复制辅助邮箱' : '复制辅助邮箱：' + selectedRecord.recovery_email }}</span>
                 </button>
               </div>
             </div>
 
             <!-- Credentials & Structured Info -->
-            <div class="bg-white rounded-2xl p-4 border border-[#dadce0]/80 shadow-sm space-y-3">
+            <div class="bg-white rounded-2xl p-3 border border-[#dadce0]/80 shadow-2xs space-y-2.5">
               <!-- Password Row -->
-              <div class="flex items-center justify-between pb-3 border-b border-[#f1f3f4]">
+              <div class="flex items-center justify-between pb-2 border-b border-[#f1f3f4]">
                 <div>
-                  <div class="text-[11px] text-[#5f6368]">登录密码</div>
-                  <div class="font-mono text-sm font-semibold text-[#202124] tracking-wide mt-0.5">
+                  <div class="text-[10px] text-[#5f6368]">登录密码</div>
+                  <div class="font-mono text-xs font-semibold text-[#202124] tracking-wider mt-0.5 select-all">
                     {{ showPassword ? (selectedRecord.password || "未记录") : "••••••••••••" }}
                   </div>
                 </div>
                 <div class="flex items-center gap-1">
                   <button
                     @click="showPassword = !showPassword"
-                    class="p-1.5 hover:bg-[#f1f3f4] rounded-lg text-[#5f6368] transition-colors"
+                    class="p-1.5 hover:bg-[#f1f3f4] rounded-lg text-[#5f6368] transition-colors cursor-pointer"
                     title="显示 / 隐藏"
                   >
-                    <EyeOff v-if="showPassword" class="w-4 h-4" />
-                    <Eye v-else class="w-4 h-4" />
+                    <EyeOff v-if="showPassword" class="w-3.5 h-3.5" />
+                    <Eye v-else class="w-3.5 h-3.5" />
                   </button>
                   <button
                     @click="copyText(selectedRecord.password || '', 'pwd')"
-                    class="p-1.5 hover:bg-[#f1f3f4] rounded-lg text-[#5f6368] transition-colors"
+                    class="p-1.5 hover:bg-[#f1f3f4] rounded-lg text-[#5f6368] transition-colors cursor-pointer"
                     title="复制密码"
                   >
-                    <Check v-if="copiedField === 'pwd'" class="w-4 h-4 text-emerald-600" />
-                    <Copy v-else class="w-4 h-4" />
+                    <Check v-if="copiedField === 'pwd'" class="w-3.5 h-3.5 text-emerald-600" />
+                    <Copy v-else class="w-3.5 h-3.5" />
                   </button>
                 </div>
               </div>
 
               <!-- Information Grid -->
-              <div class="grid grid-cols-2 gap-y-2 text-xs">
+              <div class="grid grid-cols-2 gap-y-1.5 text-xs">
                 <div class="text-[#5f6368]">所属分组</div>
-                <div class="text-[#202124] font-medium">{{ selectedRecord.group || "未分组" }}</div>
+                <div class="text-[#202124] font-medium truncate">{{ selectedRecord.group || "未分组" }}</div>
 
                 <div class="text-[#5f6368]">恢复邮箱</div>
-                <div class="text-[#1a73e8] font-medium truncate">{{ selectedRecord.recovery_email || "—" }}</div>
+                <div class="text-[#1a73e8] font-medium truncate" :title="selectedRecord.recovery_email">{{ selectedRecord.recovery_email || "—" }}</div>
 
                 <div class="text-[#5f6368]">恢复手机</div>
-                <div class="text-[#202124] font-medium">{{ selectedRecord.phone || "—" }}</div>
+                <div class="text-[#202124] font-medium truncate">{{ selectedRecord.phone || "—" }}</div>
 
                 <div class="text-[#5f6368]">验证方式</div>
-                <div class="text-[#202124] font-medium">{{ selectedRecord.verification || "—" }}</div>
+                <div class="text-[#202124] font-medium truncate">{{ selectedRecord.verification || "—" }}</div>
 
                 <div class="text-[#5f6368]">Google One</div>
-                <div class="text-[#202124] font-medium">
+                <div class="text-[#202124] font-medium truncate">
                   {{ selectedRecord.google_one_plan ? (selectedRecord.google_one_plan + (selectedRecord.google_one_used ? ' (' + selectedRecord.google_one_used + ')' : '')) : '—' }}
                 </div>
               </div>
 
               <!-- Notes -->
               <div v-if="selectedRecord.notes" class="pt-2 border-t border-[#f1f3f4] text-xs text-[#5f6368]">
-                <div class="font-medium mb-1">备注信息：</div>
-                <div class="p-2 bg-[#f8fafd] rounded-xl text-[#202124] leading-relaxed">{{ selectedRecord.notes }}</div>
+                <div class="font-medium text-[11px] mb-1">备注信息：</div>
+                <div class="p-2 bg-[#f8fafd] rounded-xl text-[#202124] text-[11px] leading-relaxed whitespace-pre-wrap">{{ selectedRecord.notes }}</div>
               </div>
             </div>
 
             <!-- TOTP Card -->
-            <div class="bg-[#edf2fa] rounded-2xl p-4 border border-[#d3e3fd]/80">
-              <div class="flex items-center justify-between mb-2">
+            <div class="bg-[#edf2fa] rounded-2xl p-3 border border-[#d3e3fd]/80">
+              <div class="flex items-center justify-between mb-1.5">
                 <span class="text-xs font-bold text-[#444746] flex items-center gap-1.5">
-                  <Clock class="w-4 h-4 text-[#1a73e8]" />
+                  <Clock class="w-3.5 h-3.5 text-[#1a73e8]" />
                   2FA 动态安全码 (TOTP)
                 </span>
-                <span class="text-xs font-mono text-[#5f6368]">{{ totpMap[selectedRecord.id]?.remaining_seconds || 30 }}s 后刷新</span>
+                <span class="text-[11px] font-mono text-[#5f6368]">{{ totpMap[selectedRecord.id]?.remaining_seconds || 30 }}s 后刷新</span>
               </div>
 
-              <div class="flex items-center justify-between my-2">
-                <div class="font-mono text-3xl font-extrabold tracking-widest text-[#1a73e8]">
+              <div class="flex items-center justify-between my-1">
+                <div class="font-mono text-2xl font-black tracking-widest text-[#1a73e8]">
                   {{ totpMap[selectedRecord.id]?.code || "未配置" }}
                 </div>
                 <button
                   v-if="selectedRecord.totp"
                   @click="copyText(totpMap[selectedRecord.id]?.code || '', 'totp_large')"
-                  class="px-3 py-1.5 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium flex items-center gap-1.5 shadow-sm transition-all"
+                  class="px-2.5 py-1 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium flex items-center gap-1 shadow-2xs transition-all cursor-pointer"
                 >
                   <Check v-if="copiedField === 'totp_large'" class="w-3.5 h-3.5" />
                   <Copy v-else class="w-3.5 h-3.5" />
@@ -1765,16 +1825,16 @@ onUnmounted(() => {
             </div>
 
             <!-- BACKUP CODES CARD -->
-            <div class="bg-white rounded-2xl p-4 border border-[#dadce0]/80 shadow-sm space-y-3">
+            <div class="bg-white rounded-2xl p-3 border border-[#dadce0]/80 shadow-2xs space-y-2">
               <div class="flex items-center justify-between">
                 <span class="text-xs font-bold text-[#202124] flex items-center gap-1.5">
-                  <KeyRound class="w-4 h-4 text-[#1a73e8]" />
+                  <KeyRound class="w-3.5 h-3.5 text-[#1a73e8]" />
                   Google 备用验证码
                 </span>
                 <span
                   v-if="parsedBackupCodesList.length > 0"
                   :class="[
-                    'text-[11px] font-semibold px-2 py-0.5 rounded-full font-mono',
+                    'text-[10px] font-semibold px-2 py-0.5 rounded-full font-mono',
                     unusedBackupCodesCount > 0 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'
                   ]"
                 >
@@ -1782,11 +1842,11 @@ onUnmounted(() => {
                 </span>
               </div>
 
-              <div v-if="parsedBackupCodesList.length > 0" class="space-y-2">
+              <div v-if="parsedBackupCodesList.length > 0" class="space-y-1.5">
                 <button
                   @click="copyAndConsumeNextBackupCode"
                   :disabled="unusedBackupCodesCount === 0"
-                  class="w-full py-2 bg-[#1a73e8] hover:bg-[#1557b0] active:bg-[#174ea6] text-white rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 shadow-sm transition-all disabled:opacity-50"
+                  class="w-full py-1.5 bg-[#1a73e8] hover:bg-[#1557b0] active:bg-[#174ea6] text-white rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 shadow-2xs transition-all disabled:opacity-50 cursor-pointer"
                   title="自动复制下一个未使用的备用码，并立即标记为已使用"
                 >
                   <Check v-if="copiedField === 'backup_code_consumed'" class="w-3.5 h-3.5" />
@@ -1796,17 +1856,17 @@ onUnmounted(() => {
 
                 <button
                   @click="openBackupCodesModal"
-                  class="w-full py-1.5 bg-[#f1f3f4] hover:bg-[#e8eaed] text-[#3c4043] rounded-xl text-xs font-medium flex items-center justify-center gap-1 transition-all"
+                  class="w-full py-1 bg-[#f1f3f4] hover:bg-[#e8eaed] text-[#3c4043] rounded-xl text-xs font-medium flex items-center justify-center gap-1 transition-all cursor-pointer"
                 >
                   <span>查看全部备用码与核销状态</span>
                 </button>
               </div>
 
-              <div v-else class="text-center py-2">
-                <p class="text-xs text-[#80868b] mb-2">尚未配置备用验证码</p>
+              <div v-else class="text-center py-1.5">
+                <p class="text-[11px] text-[#80868b] mb-1.5">尚未配置备用验证码</p>
                 <button
                   @click="openBackupCodesModal"
-                  class="px-3 py-1 bg-[#e8f0fe] hover:bg-[#d2e3fc] text-[#1a73e8] rounded-lg text-xs font-medium transition-all"
+                  class="px-2.5 py-1 bg-[#e8f0fe] hover:bg-[#d2e3fc] text-[#1a73e8] rounded-lg text-xs font-medium transition-all cursor-pointer"
                 >
                   + 批量粘贴备用码
                 </button>
@@ -1814,27 +1874,27 @@ onUnmounted(() => {
             </div>
 
             <!-- Action Buttons -->
-            <div class="space-y-2 pt-2">
+            <div class="space-y-1.5 pt-1">
               <button
                 @click="openEditModal(selectedRecord)"
-                class="w-full py-2.5 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium flex items-center justify-center gap-2 shadow-sm transition-all"
+                class="w-full py-2 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 shadow-2xs transition-all cursor-pointer"
               >
-                <Edit3 class="w-4 h-4" />
+                <Edit3 class="w-3.5 h-3.5" />
                 <span>编辑该账号资料</span>
               </button>
               <button
                 @click="handleDeleteRecord(selectedRecord.id)"
-                class="w-full py-2 text-rose-600 hover:bg-rose-50 rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 transition-colors"
+                class="w-full py-1.5 text-rose-600 hover:bg-rose-50 rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
               >
-                <Trash2 class="w-3.5 h-3.5" />
+                <Trash2 class="w-3 h-3" />
                 <span>删除此本地记录</span>
               </button>
             </div>
           </template>
 
           <div v-else class="flex-1 flex flex-col items-center justify-center text-center p-6 text-[#80868b]">
-            <User class="w-12 h-12 mb-3 text-[#dadce0]" />
-            <p class="text-xs">请在左侧或中间列表选择一个账号查看详情</p>
+            <User class="w-10 h-10 mb-2 text-[#dadce0]" />
+            <p class="text-xs">请在列表中选择一个账号查看详情</p>
           </div>
         </aside>
 
