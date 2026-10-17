@@ -47,7 +47,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path "artifacts"
           # Copy NSIS setup installer
-          $setup = Get-ChildItem -Path "src-tauri/target/release/bundle/nsis/*.exe" | Select-Object -First 1
+          $setup = Get-ChildItem -Path "src-tauri/target/release/bundle/nsis/*.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($setup) {
             Copy-Item $setup.FullName -Destination "artifacts/GoogleAccountVault_Setup.exe"
           }
@@ -81,20 +81,25 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '21'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      - name: Setup Android SDK Environment & Accept Licenses
+        run: |
+          echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> $GITHUB_ENV
+          yes | /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager --licenses || true
+          /usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager "platforms;android-36" "build-tools;36.0.0" || true
 
       - name: Setup Android NDK
         uses: nttld/setup-ndk@v1
+        id: setup-ndk
         with:
           ndk-version: r26d
           link-to-sdk: true
 
       - name: Set NDK Environment
         run: |
-          echo "NDK_HOME=$ANDROID_NDK_HOME" >> $GITHUB_ENV
+          echo "NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -116,7 +121,12 @@ jobs:
       - name: Prepare Android artifact
         run: |
           mkdir -p artifacts
-          cp src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk artifacts/GoogleAccountVault.apk
+          APK_FILE=$(find src-tauri/gen/android/app/build/outputs/apk -name "*release*.apk" | head -n 1)
+          if [ -z "$APK_FILE" ]; then
+            APK_FILE=$(find src-tauri/gen/android/app/build/outputs/apk -name "*.apk" | head -n 1)
+          fi
+          echo "Found APK at: $APK_FILE"
+          cp "$APK_FILE" artifacts/GoogleAccountVault.apk
 
       - name: Upload Android artifact
         uses: actions/upload-artifact@v4
@@ -147,17 +157,11 @@ jobs:
           echo "RELEASE_TAG=$TAG" >> $GITHUB_OUTPUT
           echo "Determined release tag: $TAG"
 
-      - name: Download Windows artifacts
+      - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
-          name: windows-binaries
           path: release-assets
-
-      - name: Download Android artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: android-binaries
-          path: release-assets
+          merge-multiple: true
 
       - name: Rename assets with version tag & Generate Checksums
         run: |
