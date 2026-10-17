@@ -1290,7 +1290,7 @@ onUnmounted(() => {
           </div>
           <div class="flex items-baseline gap-2">
             <span class="font-bold text-base text-[#202124] tracking-tight">Google 账号管家</span>
-            <span class="text-[11px] font-semibold uppercase px-2 py-0.5 bg-[#e8f0fe] text-[#1a73e8] rounded-full">v3.0.0 Rust</span>
+            <span class="text-[11px] font-semibold uppercase px-2 py-0.5 bg-[#e8f0fe] text-[#1a73e8] rounded-full">v3.0.1 Rust</span>
           </div>
         </div>
 
@@ -1744,14 +1744,14 @@ onUnmounted(() => {
             <!-- Credentials & Structured Info -->
             <div class="bg-white rounded-2xl p-3 border border-[#dadce0]/80 shadow-2xs space-y-2.5">
               <!-- Password Row -->
-              <div class="flex items-center justify-between pb-2 border-b border-[#f1f3f4]">
-                <div>
+              <div class="flex items-start justify-between gap-2.5 pb-2 border-b border-[#f1f3f4]">
+                <div class="min-w-0 flex-1">
                   <div class="text-[10px] text-[#5f6368]">登录密码</div>
-                  <div class="font-mono text-xs font-semibold text-[#202124] tracking-wider mt-0.5 select-all">
+                  <div class="font-mono text-xs font-semibold text-[#202124] tracking-wide mt-0.5 select-all break-all leading-relaxed">
                     {{ showPassword ? (selectedRecord.password || "未记录") : "••••••••••••" }}
                   </div>
                 </div>
-                <div class="flex items-center gap-1">
+                <div class="flex items-center gap-1 flex-shrink-0 pt-0.5">
                   <button
                     @click="showPassword = !showPassword"
                     class="p-1.5 hover:bg-[#f1f3f4] rounded-lg text-[#5f6368] transition-colors cursor-pointer"
@@ -2724,7 +2724,7 @@ onUnmounted(() => {
                     <h3 class="text-xs font-bold text-[#202124] flex items-center gap-2 flex-wrap">
                       <span>软件版本检查更新</span>
                       <span class="px-2 py-0.5 rounded-full bg-[#e8f0fe] text-[#1a73e8] text-[10px] font-mono font-bold whitespace-nowrap">
-                        当前: v3.0.0
+                        当前: v3.0.1
                       </span>
                     </h3>
                     <p class="text-[11px] text-[#5f6368] mt-0.5">
@@ -2827,7 +2827,7 @@ onUnmounted(() => {
               </div>
               <div>
                 <h3 class="text-base font-bold text-[#202124]">Google 账号管家</h3>
-                <p class="text-xs text-[#1a73e8] font-mono font-medium mt-0.5">v3.0.0 (Rust 2024 · Tauri 2.0 Native)</p>
+                <p class="text-xs text-[#1a73e8] font-mono font-medium mt-0.5">v3.0.1 (Rust 2024 · Tauri 2.0 Native)</p>
               </div>
               <p class="text-xs text-[#5f6368] max-w-md leading-relaxed">
                 面向专业运维与个人多账号管理的高性能轻量跨平台保险库，集成 RFC 6238 2FA 动态码、硬件级免密解锁（Windows Hello / 移动端生物识别）、多隔离环境浏览器会话与 WebDAV 端到端纯密文同步。
