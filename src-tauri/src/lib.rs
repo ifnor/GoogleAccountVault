@@ -501,6 +501,14 @@ async fn open_in_app_browser(
     }
 }
 
+#[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
+pub struct ReleaseAsset {
+    pub name: String,
+    pub download_url: String,
+    pub size: u64,
+    pub asset_type: String, // "setup", "portable", "apk", "other"
+}
+
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct UpdateInfo {
     pub current_version: String,
@@ -511,6 +519,10 @@ pub struct UpdateInfo {
     pub published_at: String,
     pub release_url: String,
     pub download_url: Option<String>,
+    pub setup_url: Option<String>,
+    pub portable_url: Option<String>,
+    pub apk_url: Option<String>,
+    pub assets: Vec<ReleaseAsset>,
 }
 
 fn parse_semver(v: &str) -> (u32, u32, u32) {
@@ -534,7 +546,7 @@ async fn check_github_update(repo: Option<String>) -> Result<UpdateInfo, String>
     );
 
     let client = reqwest::Client::builder()
-        .user_agent("google-account-vault/3.0.1")
+        .user_agent("google-account-vault/3.0.2")
         .timeout(std::time::Duration::from_secs(8))
         .build()
         .map_err(|e| format!("构建 HTTP 客户端失败: {e}"))?;
@@ -547,14 +559,18 @@ async fn check_github_update(repo: Option<String>) -> Result<UpdateInfo, String>
 
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(UpdateInfo {
-            current_version: "3.0.1".to_string(),
-            latest_version: "3.0.1".to_string(),
+            current_version: "3.0.2".to_string(),
+            latest_version: "3.0.2".to_string(),
             has_update: false,
             release_name: "暂无发布版本".to_string(),
             release_notes: format!("仓库 {} 尚未发布任何公开 Release", target_repo),
             published_at: String::new(),
             release_url: format!("https://github.com/{}", target_repo),
             download_url: None,
+            setup_url: None,
+            portable_url: None,
+            apk_url: None,
+            assets: Vec::new(),
         });
     }
 
@@ -569,7 +585,7 @@ async fn check_github_update(repo: Option<String>) -> Result<UpdateInfo, String>
     let json: serde_json::Value =
         serde_json::from_str(&body).map_err(|e| format!("解析 Release JSON 失败: {e}"))?;
 
-    let tag = json["tag_name"].as_str().unwrap_or("3.0.1").to_string();
+    let tag = json["tag_name"].as_str().unwrap_or("3.0.2").to_string();
     let name = json["name"].as_str().unwrap_or(&tag).to_string();
     let notes = json["body"].as_str().unwrap_or("").to_string();
     let published_at = json["published_at"].as_str().unwrap_or("").to_string();
@@ -578,31 +594,60 @@ async fn check_github_update(repo: Option<String>) -> Result<UpdateInfo, String>
         .unwrap_or(&format!("https://github.com/{}/releases", target_repo))
         .to_string();
 
-    let mut download_url = None;
-    if let Some(assets) = json["assets"].as_array() {
-        #[cfg(target_os = "android")]
-        let target_ext = ".apk";
-        #[cfg(not(target_os = "android"))]
-        let target_ext = ".exe";
+    let mut asset_list = Vec::new();
+    let mut setup_url = None;
+    let mut portable_url = None;
+    let mut apk_url = None;
 
+    if let Some(assets) = json["assets"].as_array() {
         for asset in assets {
-            if let Some(asset_name) = asset["name"].as_str() {
-                if asset_name.ends_with(target_ext) {
-                    download_url = asset["browser_download_url"]
-                        .as_str()
-                        .map(|s| s.to_string());
-                    break;
-                }
+            if let (Some(asset_name), Some(browser_url)) = (
+                asset["name"].as_str(),
+                asset["browser_download_url"].as_str(),
+            ) {
+                let size = asset["size"].as_u64().unwrap_or(0);
+                let name_lower = asset_name.to_lowercase();
+                let asset_type = if name_lower.ends_with(".apk") {
+                    apk_url = Some(browser_url.to_string());
+                    "apk"
+                } else if (name_lower.contains("setup") || name_lower.contains("installer"))
+                    && name_lower.ends_with(".exe")
+                {
+                    setup_url = Some(browser_url.to_string());
+                    "setup"
+                } else if name_lower.contains("portable") && name_lower.ends_with(".exe") {
+                    portable_url = Some(browser_url.to_string());
+                    "portable"
+                } else if name_lower.ends_with(".exe") {
+                    if setup_url.is_none() {
+                        setup_url = Some(browser_url.to_string());
+                    }
+                    "setup"
+                } else {
+                    "other"
+                };
+
+                asset_list.push(ReleaseAsset {
+                    name: asset_name.to_string(),
+                    download_url: browser_url.to_string(),
+                    size,
+                    asset_type: asset_type.to_string(),
+                });
             }
         }
     }
 
-    let current = (3, 0, 1);
+    #[cfg(target_os = "android")]
+    let download_url = apk_url.clone();
+    #[cfg(not(target_os = "android"))]
+    let download_url = setup_url.clone().or_else(|| portable_url.clone());
+
+    let current = (3, 0, 2);
     let latest = parse_semver(&tag);
     let has_update = latest > current;
 
     Ok(UpdateInfo {
-        current_version: "3.0.1".to_string(),
+        current_version: "3.0.2".to_string(),
         latest_version: tag,
         has_update,
         release_name: name,
@@ -610,13 +655,130 @@ async fn check_github_update(repo: Option<String>) -> Result<UpdateInfo, String>
         published_at,
         release_url: html_url,
         download_url,
+        setup_url,
+        portable_url,
+        apk_url,
+        assets: asset_list,
     })
 }
 
 #[tauri::command]
-fn open_external_url(url: String) -> Result<(), String> {
-    tauri_plugin_opener::open_url(url, None::<&str>)
+fn open_external_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_url(&url, None::<&str>)
         .map_err(|e| format!("打开系统浏览器链接失败: {e}"))
+}
+
+#[tauri::command]
+async fn start_auto_update(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    use futures_util::StreamExt;
+    use std::io::Write;
+    use tauri::Emitter;
+
+    let client = reqwest::Client::builder()
+        .user_agent("google-account-vault/3.0.2")
+        .build()
+        .map_err(|e| format!("初始化下载客户端失败: {e}"))?;
+
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("发起下载请求失败: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("下载响应错误: HTTP {}", resp.status()));
+    }
+
+    let total_bytes = resp.content_length().unwrap_or(0);
+    let is_setup = url.to_lowercase().contains("setup") || !url.to_lowercase().contains("portable");
+
+    let temp_dir = std::env::temp_dir();
+    let temp_file_path = if is_setup {
+        temp_dir.join("GoogleAccountVault_Update_Setup.exe")
+    } else {
+        temp_dir.join("GoogleAccountVault_Update_Portable.exe")
+    };
+
+    let mut file = std::fs::File::create(&temp_file_path)
+        .map_err(|e| format!("创建更新临时文件失败: {e}"))?;
+
+    let mut stream = resp.bytes_stream();
+    let mut downloaded: u64 = 0;
+    let mut last_percent: u32 = 0;
+
+    while let Some(chunk_res) = stream.next().await {
+        let chunk = chunk_res.map_err(|e| format!("下载更新数据包中断: {e}"))?;
+        file.write_all(&chunk)
+            .map_err(|e| format!("写入更新文件失败: {e}"))?;
+        downloaded += chunk.len() as u64;
+
+        if total_bytes > 0 {
+            let percent = ((downloaded as f64 / total_bytes as f64) * 100.0) as u32;
+            if percent != last_percent {
+                last_percent = percent;
+                let _ = app.emit(
+                    "update-download-progress",
+                    serde_json::json!({
+                        "downloaded": downloaded,
+                        "total": total_bytes,
+                        "percent": percent
+                    }),
+                );
+            }
+        }
+    }
+
+    file.flush()
+        .map_err(|e| format!("保存更新文件失败: {e}"))?;
+    drop(file);
+
+    let _ = app.emit(
+        "update-download-progress",
+        serde_json::json!({
+            "downloaded": downloaded,
+            "total": downloaded,
+            "percent": 100
+        }),
+    );
+
+    #[cfg(target_os = "windows")]
+    {
+        if is_setup {
+            std::process::Command::new(&temp_file_path)
+                .spawn()
+                .map_err(|e| format!("启动安装升级程序失败: {e}"))?;
+            app.exit(0);
+        } else {
+            if let Ok(current_exe) = std::env::current_exe() {
+                let current_exe_str = current_exe.to_string_lossy().to_string();
+                let temp_str = temp_file_path.to_string_lossy().to_string();
+                let cmd_arg = format!(
+                    "ping 127.0.0.1 -n 2 > nul & copy /y \"{}\" \"{}\" & start \"\" \"{}\"",
+                    temp_str, current_exe_str, current_exe_str
+                );
+                std::process::Command::new("cmd.exe")
+                    .args(["/C", &cmd_arg])
+                    .spawn()
+                    .map_err(|e| format!("启动便携程序替换进程失败: {e}"))?;
+                app.exit(0);
+            } else {
+                std::process::Command::new(&temp_file_path)
+                    .spawn()
+                    .map_err(|e| format!("启动更新程序失败: {e}"))?;
+                app.exit(0);
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        use tauri_plugin_opener::OpenerExt;
+        let _ = app.opener().open_url(&url, None::<&str>);
+    }
+
+    Ok(())
 }
 
 use tauri::Manager;
@@ -689,7 +851,8 @@ pub fn run() {
             unlock_vault_with_hello,
             generate_custom_pwd,
             check_github_update,
-            open_external_url
+            open_external_url,
+            start_auto_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from "vue";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   Lock,
   Unlock,
@@ -800,6 +802,13 @@ const isWebDavSyncing = ref(false);
 const showSettingsModal = ref(false);
 const settingsTab = ref<"security" | "webdav" | "backups" | "updates" | "about">("security");
 
+interface ReleaseAsset {
+  name: string;
+  download_url: string;
+  size: number;
+  asset_type: string;
+}
+
 interface UpdateInfo {
   current_version: string;
   latest_version: string;
@@ -809,11 +818,19 @@ interface UpdateInfo {
   published_at: string;
   release_url: string;
   download_url: string | null;
+  setup_url: string | null;
+  portable_url: string | null;
+  apk_url: string | null;
+  assets: ReleaseAsset[];
 }
 const customRepo = ref("ifnor/GoogleAccountVault");
 const isCheckingUpdate = ref(false);
 const updateResult = ref<UpdateInfo | null>(null);
 const updateError = ref("");
+const isDownloadingUpdate = ref(false);
+const downloadProgress = ref(0);
+const downloadStatusText = ref("");
+let unlistenUpdateProgress: UnlistenFn | null = null;
 
 async function openSettingsModal(tab: "security" | "webdav" | "backups" | "updates" | "about" = "security") {
   settingsTab.value = tab;
@@ -856,11 +873,39 @@ async function checkForUpdates() {
   }
 }
 
-async function openExternalUrl(url: string) {
+async function openExternalUrl(url?: string | null) {
+  if (!url) return;
   try {
-    await invoke("open_external_url", { url });
-  } catch (e) {
-    window.open(url, "_blank");
+    await openUrl(url);
+    return;
+  } catch (e1) {
+    try {
+      await invoke("open_external_url", { url });
+      return;
+    } catch (e2) {
+      window.open(url, "_blank");
+    }
+  }
+}
+
+async function startAutoUpdate(targetUrl?: string) {
+  const url = targetUrl || updateResult.value?.setup_url || updateResult.value?.download_url;
+  if (!url) {
+    notify("未找到有效下载地址，请尝试浏览器下载", "error");
+    return;
+  }
+
+  isDownloadingUpdate.value = true;
+  downloadProgress.value = 0;
+  downloadStatusText.value = "正在连接下载服务器...";
+
+  try {
+    await invoke("start_auto_update", { url });
+  } catch (err: any) {
+    isDownloadingUpdate.value = false;
+    const msg = typeof err === "string" ? err : (err?.message || "自动更新失败");
+    notify("自动更新异常: " + msg, "error", 6000);
+    downloadStatusText.value = "更新异常: " + msg;
   }
 }
 
@@ -1188,6 +1233,24 @@ onMounted(async () => {
     window.addEventListener("resize", updateWindowWidth);
     updateWindowWidth();
   }
+
+  try {
+    unlistenUpdateProgress = await listen<{ downloaded: number; total: number; percent: number }>(
+      "update-download-progress",
+      (event) => {
+        downloadProgress.value = event.payload.percent;
+        if (event.payload.percent >= 100) {
+          downloadStatusText.value = "下载完成！正在启动升级安装向导...";
+        } else {
+          const mb = (event.payload.downloaded / (1024 * 1024)).toFixed(1);
+          const totalMb = (event.payload.total / (1024 * 1024)).toFixed(1);
+          downloadStatusText.value = `正在下载更新包：${mb} MB / ${totalMb} MB (${event.payload.percent}%)`;
+        }
+      }
+    );
+  } catch (e) {
+    console.warn("Failed to listen to update progress:", e);
+  }
 });
 
 onUnmounted(() => {
@@ -1198,6 +1261,9 @@ onUnmounted(() => {
   }
   if (backButtonListener) {
     backButtonListener.unregister().catch(() => {});
+  }
+  if (unlistenUpdateProgress) {
+    unlistenUpdateProgress();
   }
 });
 </script>
@@ -1290,7 +1356,7 @@ onUnmounted(() => {
           </div>
           <div class="flex items-baseline gap-2">
             <span class="font-bold text-base text-[#202124] tracking-tight">Google 账号管家</span>
-            <span class="text-[11px] font-semibold uppercase px-2 py-0.5 bg-[#e8f0fe] text-[#1a73e8] rounded-full">v3.0.1 Rust</span>
+            <span class="text-[11px] font-semibold uppercase px-2 py-0.5 bg-[#e8f0fe] text-[#1a73e8] rounded-full">v3.0.2 Rust</span>
           </div>
         </div>
 
@@ -2724,7 +2790,7 @@ onUnmounted(() => {
                     <h3 class="text-xs font-bold text-[#202124] flex items-center gap-2 flex-wrap">
                       <span>软件版本检查更新</span>
                       <span class="px-2 py-0.5 rounded-full bg-[#e8f0fe] text-[#1a73e8] text-[10px] font-mono font-bold whitespace-nowrap">
-                        当前: v3.0.1
+                        当前: v3.0.2
                       </span>
                     </h3>
                     <p class="text-[11px] text-[#5f6368] mt-0.5">
@@ -2735,7 +2801,7 @@ onUnmounted(() => {
 
                 <button
                   @click="checkForUpdates"
-                  :disabled="isCheckingUpdate"
+                  :disabled="isCheckingUpdate || isDownloadingUpdate"
                   class="w-full sm:w-auto px-4 py-2 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 shadow-sm transition-all disabled:opacity-50 cursor-pointer whitespace-nowrap flex-shrink-0"
                 >
                   <RefreshCw :class="['w-3.5 h-3.5', isCheckingUpdate ? 'animate-spin' : '']" />
@@ -2769,30 +2835,156 @@ onUnmounted(() => {
               <!-- Case A: New Version Available -->
               <div
                 v-if="updateResult.has_update"
-                class="p-4 bg-emerald-50 border border-emerald-200 rounded-2xl space-y-3"
+                class="p-4 bg-gradient-to-br from-emerald-50 to-teal-50/40 border border-emerald-200 rounded-2xl space-y-3.5 shadow-xs"
               >
+                <!-- Title & Version Info -->
                 <div class="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
-                  <div class="flex items-center gap-2">
-                    <Sparkles class="w-5 h-5 text-emerald-600 flex-shrink-0" />
+                  <div class="flex items-start gap-2.5">
+                    <div class="w-8 h-8 rounded-xl bg-emerald-100 flex items-center justify-center text-emerald-700 flex-shrink-0 mt-0.5">
+                      <Sparkles class="w-4 h-4" />
+                    </div>
                     <div>
-                      <h4 class="text-sm font-bold text-emerald-900">
-                        发现新版本：{{ updateResult.latest_version }}
+                      <h4 class="text-sm font-bold text-emerald-950 flex items-center gap-2 flex-wrap">
+                        <span>发现新版本：{{ updateResult.latest_version }}</span>
+                        <span class="px-2 py-0.5 rounded-full bg-emerald-200/70 text-emerald-800 text-[10px] font-mono font-bold">
+                          可升级
+                        </span>
                       </h4>
                       <p class="text-[11px] text-emerald-700 mt-0.5">
                         {{ updateResult.release_name }} · 发布于 {{ updateResult.published_at.substring(0, 10) }}
                       </p>
                     </div>
                   </div>
-                  <button
-                    @click="openExternalUrl(updateResult.download_url || updateResult.release_url)"
-                    class="w-full sm:w-auto px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold shadow-sm transition-all flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap flex-shrink-0"
-                  >
-                    <Download class="w-3.5 h-3.5" />
-                    <span>前往下载更新</span>
-                  </button>
+
+                  <!-- Primary Action: In-app auto-update on desktop / Direct APK on mobile -->
+                  <div class="flex items-center gap-2 flex-wrap sm:flex-nowrap">
+                    <button
+                      v-if="!isDownloadingUpdate && !isMobilePlatform"
+                      @click="startAutoUpdate()"
+                      class="w-full sm:w-auto px-4 py-2 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white rounded-xl text-xs font-semibold shadow-sm transition-all flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap flex-shrink-0"
+                    >
+                      <RefreshCw class="w-3.5 h-3.5" />
+                      <span>一键自动更新 (推荐)</span>
+                    </button>
+
+                    <button
+                      v-if="isMobilePlatform"
+                      @click="openExternalUrl(updateResult.apk_url || updateResult.download_url || updateResult.release_url)"
+                      class="w-full sm:w-auto px-4 py-2 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white rounded-xl text-xs font-semibold shadow-sm transition-all flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap flex-shrink-0"
+                    >
+                      <Download class="w-3.5 h-3.5" />
+                      <span>立即下载 APK 安装包</span>
+                    </button>
+                  </div>
                 </div>
 
+                <!-- Active In-App Downloading Progress Bar -->
+                <div v-if="isDownloadingUpdate" class="p-3 bg-white/90 rounded-xl border border-emerald-200/80 space-y-2">
+                  <div class="flex items-center justify-between text-xs font-medium text-emerald-900">
+                    <div class="flex items-center gap-2">
+                      <RefreshCw class="w-3.5 h-3.5 text-emerald-600 animate-spin" />
+                      <span>{{ downloadStatusText }}</span>
+                    </div>
+                    <span class="font-mono font-bold">{{ downloadProgress }}%</span>
+                  </div>
+                  <div class="w-full h-2.5 bg-emerald-100 rounded-full overflow-hidden">
+                    <div
+                      class="h-full bg-emerald-600 rounded-full transition-all duration-300 ease-out"
+                      :style="{ width: `${downloadProgress}%` }"
+                    ></div>
+                  </div>
+                  <p class="text-[10px] text-emerald-700">
+                    下载完成后将自动启动最新版安装包进行无缝升级并退出当前版本。
+                  </p>
+                </div>
+
+                <!-- Platform Download Options -->
+                <div class="pt-2 border-t border-emerald-200/60">
+                  <div class="text-[11px] font-semibold text-emerald-900 mb-2">全平台安装包分流下载：</div>
+                  <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <!-- Windows Setup -->
+                    <div class="p-2.5 bg-white/80 rounded-xl border border-emerald-100 flex flex-col justify-between gap-1.5">
+                      <div>
+                        <div class="font-semibold text-xs text-[#202124] flex items-center gap-1">
+                          <span>Windows 安装包</span>
+                          <span class="text-[9px] px-1.5 py-0.2 bg-[#e8f0fe] text-[#1a73e8] rounded font-mono">Setup.exe</span>
+                        </div>
+                        <div class="text-[10px] text-[#5f6368] mt-0.5">标准向导安装，支持自动升级与快捷方式</div>
+                      </div>
+                      <div class="flex items-center gap-1.5 mt-1">
+                        <button
+                          v-if="!isMobilePlatform"
+                          @click="startAutoUpdate(updateResult.setup_url || undefined)"
+                          :disabled="isDownloadingUpdate"
+                          class="flex-1 py-1 px-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] font-medium transition-colors cursor-pointer text-center"
+                        >
+                          一键升级
+                        </button>
+                        <button
+                          @click="openExternalUrl(updateResult.setup_url || updateResult.release_url)"
+                          class="py-1 px-2 bg-white hover:bg-[#f1f3f4] text-[#5f6368] border border-[#dadce0] rounded-lg text-[11px] font-medium transition-colors cursor-pointer text-center"
+                          title="浏览器直接下载"
+                        >
+                          <Download class="w-3 h-3 inline mr-0.5" />
+                          下载
+                        </button>
+                      </div>
+                    </div>
+
+                    <!-- Windows Portable -->
+                    <div class="p-2.5 bg-white/80 rounded-xl border border-emerald-100 flex flex-col justify-between gap-1.5">
+                      <div>
+                        <div class="font-semibold text-xs text-[#202124] flex items-center gap-1">
+                          <span>Windows 便携版</span>
+                          <span class="text-[9px] px-1.5 py-0.2 bg-[#f1f3f4] text-[#5f6368] rounded font-mono">Portable.exe</span>
+                        </div>
+                        <div class="text-[10px] text-[#5f6368] mt-0.5">绿色免安装单文件，解压或双击即用</div>
+                      </div>
+                      <div class="flex items-center gap-1.5 mt-1">
+                        <button
+                          v-if="!isMobilePlatform"
+                          @click="startAutoUpdate(updateResult.portable_url || undefined)"
+                          :disabled="isDownloadingUpdate"
+                          class="flex-1 py-1 px-2 bg-slate-700 hover:bg-slate-800 text-white rounded-lg text-[11px] font-medium transition-colors cursor-pointer text-center"
+                        >
+                          替换升级
+                        </button>
+                        <button
+                          @click="openExternalUrl(updateResult.portable_url || updateResult.release_url)"
+                          class="py-1 px-2 bg-white hover:bg-[#f1f3f4] text-[#5f6368] border border-[#dadce0] rounded-lg text-[11px] font-medium transition-colors cursor-pointer text-center"
+                          title="浏览器直接下载"
+                        >
+                          <Download class="w-3 h-3 inline mr-0.5" />
+                          下载
+                        </button>
+                      </div>
+                    </div>
+
+                    <!-- Android APK -->
+                    <div class="p-2.5 bg-white/80 rounded-xl border border-emerald-100 flex flex-col justify-between gap-1.5">
+                      <div>
+                        <div class="font-semibold text-xs text-[#202124] flex items-center gap-1">
+                          <span>Android 手机版</span>
+                          <span class="text-[9px] px-1.5 py-0.2 bg-emerald-100 text-emerald-800 rounded font-mono">.apk</span>
+                        </div>
+                        <div class="text-[10px] text-[#5f6368] mt-0.5">安卓端通用安装包，集成生物指纹解锁</div>
+                      </div>
+                      <div class="flex items-center gap-1.5 mt-1">
+                        <button
+                          @click="openExternalUrl(updateResult.apk_url || updateResult.release_url)"
+                          class="flex-1 py-1 px-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] font-medium transition-colors cursor-pointer text-center flex items-center justify-center gap-1"
+                        >
+                          <Download class="w-3 h-3" />
+                          <span>下载 APK 安装包</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Release Notes -->
                 <div v-if="updateResult.release_notes" class="p-3 bg-white/90 rounded-xl border border-emerald-100 text-xs font-sans text-[#202124] max-h-48 overflow-y-auto whitespace-pre-wrap leading-relaxed">
+                  <div class="font-bold text-[11px] text-[#5f6368] mb-1">更新日志：</div>
                   {{ updateResult.release_notes }}
                 </div>
               </div>
@@ -2827,7 +3019,7 @@ onUnmounted(() => {
               </div>
               <div>
                 <h3 class="text-base font-bold text-[#202124]">Google 账号管家</h3>
-                <p class="text-xs text-[#1a73e8] font-mono font-medium mt-0.5">v3.0.1 (Rust 2024 · Tauri 2.0 Native)</p>
+                <p class="text-xs text-[#1a73e8] font-mono font-medium mt-0.5">v3.0.2 (Rust 2024 · Tauri 2.0 Native)</p>
               </div>
               <p class="text-xs text-[#5f6368] max-w-md leading-relaxed">
                 面向专业运维与个人多账号管理的高性能轻量跨平台保险库，集成 RFC 6238 2FA 动态码、硬件级免密解锁（Windows Hello / 移动端生物识别）、多隔离环境浏览器会话与 WebDAV 端到端纯密文同步。

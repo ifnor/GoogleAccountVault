@@ -12,6 +12,7 @@
     "core:default",
     "core:app:default",
     "core:app:allow-exit",
+    "opener:default",
     "biometric:default",
     "biometric:allow-biometric-cipher",
     "biometric:allow-authenticate",
