@@ -65,13 +65,19 @@ pub fn restore_backup(filename: &str, master_password: &str) -> Result<Vec<Accou
 
 pub fn export_records_csv(records: &[AccountRecord]) -> String {
     let mut csv = String::from(
-        "邮箱,登录密码,分组,恢复邮箱,恢复手机,TOTP密钥,Google One状态,Google One方案,备用验证码,已用备用码,备注\n",
+        "邮箱,登录密码,账号状态,分组,恢复邮箱,恢复手机,TOTP密钥,Google One状态,Google One方案,备用验证码,已用备用码,备注\n",
     );
     for r in records {
+        let status = if r.status.trim().is_empty() {
+            "待录入"
+        } else {
+            &r.status
+        };
         let line = format!(
-            "\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\"\n",
+            "\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\"\n",
             r.email.replace('\"', "\"\""),
             r.password.replace('\"', "\"\""),
+            status.replace('\"', "\"\""),
             r.group.replace('\"', "\"\""),
             r.recovery_email.replace('\"', "\"\""),
             r.phone.replace('\"', "\"\""),

@@ -29,6 +29,8 @@ pub struct AccountRecord {
     pub google_one_used: String,
     #[serde(default)]
     pub google_one_status: String,
+    #[serde(default)]
+    pub status: String,
     #[serde(flatten)]
     pub extra: HashMap<String, String>,
 }

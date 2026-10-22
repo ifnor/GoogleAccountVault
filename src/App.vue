@@ -45,6 +45,7 @@ interface AccountRecord {
   email: string;
   password?: string;
   group?: string;
+  status?: string;
   recovery_email?: string;
   phone?: string;
   totp?: string;
@@ -199,6 +200,7 @@ const editForm = ref<AccountRecord>({
   email: "",
   password: "",
   group: "",
+  status: "待录入",
   recovery_email: "",
   phone: "",
   totp: "",
@@ -206,10 +208,45 @@ const editForm = ref<AccountRecord>({
   backup_codes: "",
   used_backup_codes: "[]",
   notes: "",
-  google_one_plan: "",
+  google_one_plan: "Free",
   google_one_used: "",
   google_one_status: "unknown"
 });
+
+const googleOnePlanOptions = [
+  "Free",
+  "Basic",
+  "Standard",
+  "Premium",
+  "AI Premium",
+  "Pro",
+  "Ultra"
+];
+
+const accountStatusOptions = [
+  "待录入",
+  "正常",
+  "异常",
+  "封禁",
+  "验证"
+];
+
+function getStatusBadgeClass(status?: string) {
+  const s = status || "待录入";
+  switch (s) {
+    case "正常":
+      return "px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200/80";
+    case "验证":
+      return "px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200/80";
+    case "异常":
+      return "px-2 py-0.5 rounded-full text-[10px] font-semibold bg-rose-50 text-rose-700 border border-rose-200/80";
+    case "封禁":
+      return "px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-800 border border-red-300";
+    case "待录入":
+    default:
+      return "px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-600 border border-gray-200/80";
+  }
+}
 
 // Windows Hello / Mobile Biometrics state
 const helloStatus = ref<{ available: boolean; enrolled: boolean }>({ available: false, enrolled: false });
@@ -430,7 +467,7 @@ const filteredRecords = computed(() => {
 
     // Search query
     if (q) {
-      const match = [r.email, r.group, r.notes, r.recovery_email].join(" ").toLowerCase();
+      const match = [r.email, r.group, r.notes, r.recovery_email, r.status, r.google_one_plan].join(" ").toLowerCase();
       if (!match.includes(q)) return false;
     }
     return true;
@@ -455,6 +492,7 @@ function openAddModal() {
     email: "",
     password: "",
     group: "",
+    status: "待录入",
     recovery_email: "",
     phone: "",
     totp: "",
@@ -462,7 +500,7 @@ function openAddModal() {
     backup_codes: "",
     used_backup_codes: "[]",
     notes: "",
-    google_one_plan: "",
+    google_one_plan: "Free",
     google_one_used: "",
     google_one_status: "unknown"
   };
@@ -471,6 +509,12 @@ function openAddModal() {
 
 function openEditModal(record: AccountRecord) {
   editForm.value = JSON.parse(JSON.stringify(record));
+  if (!editForm.value.google_one_plan) {
+    editForm.value.google_one_plan = "Free";
+  }
+  if (!editForm.value.status) {
+    editForm.value.status = "待录入";
+  }
   isEditing.value = true;
 }
 
@@ -747,6 +791,7 @@ function parseSmartLine(line: string): AccountRecord | null {
     email,
     password,
     group: batchAssignGroup.value.trim(),
+    status: "待录入",
     recovery_email: recoveryEmail,
     phone: "",
     totp,
@@ -754,7 +799,7 @@ function parseSmartLine(line: string): AccountRecord | null {
     backup_codes: backupCodes.join("\n"),
     used_backup_codes: "[]",
     notes: notes.join(" "),
-    google_one_plan: "",
+    google_one_plan: "Free",
     google_one_used: "",
     google_one_status: "unknown"
   };
@@ -1356,7 +1401,7 @@ onUnmounted(() => {
           </div>
           <div class="flex items-baseline gap-2">
             <span class="font-bold text-base text-[#202124] tracking-tight">Google 账号管家</span>
-            <span class="text-[11px] font-semibold uppercase px-2 py-0.5 bg-[#e8f0fe] text-[#1a73e8] rounded-full">v3.0.2 Rust</span>
+            <span class="text-[11px] font-semibold uppercase px-2 py-0.5 bg-[#e8f0fe] text-[#1a73e8] rounded-full">v3.0.3 Rust</span>
           </div>
         </div>
 
@@ -1621,9 +1666,13 @@ onUnmounted(() => {
                   {{ (r.email[0] || 'G').toUpperCase() }}
                 </div>
                 <div class="min-w-0">
-                  <div class="text-xs font-semibold text-[#202124] truncate">{{ r.email }}</div>
+                  <div class="text-xs font-semibold text-[#202124] truncate flex items-center gap-1.5">
+                    <span class="truncate">{{ r.email }}</span>
+                    <span :class="getStatusBadgeClass(r.status)">{{ r.status || '待录入' }}</span>
+                  </div>
                   <div class="text-[11px] text-[#5f6368] flex items-center gap-2 mt-0.5">
                     <span v-if="r.group" class="px-1.5 py-0.2 bg-[#f1f3f4] text-[#444746] rounded text-[10px]">{{ r.group }}</span>
+                    <span v-if="r.google_one_plan" class="px-1.5 py-0.2 bg-[#e8f0fe] text-[#1a73e8] rounded text-[10px] font-mono">{{ r.google_one_plan }}</span>
                     <span v-if="r.recovery_email" class="truncate">{{ r.recovery_email }}</span>
                   </div>
                 </div>
@@ -1745,7 +1794,10 @@ onUnmounted(() => {
                   {{ (selectedRecord.email[0] || 'G').toUpperCase() }}
                 </div>
                 <div class="min-w-0 flex-1">
-                  <div class="text-[11px] text-[#5f6368]">Google 账号</div>
+                  <div class="flex items-center justify-between gap-1.5">
+                    <div class="text-[11px] text-[#5f6368]">Google 账号</div>
+                    <span :class="getStatusBadgeClass(selectedRecord.status)">{{ selectedRecord.status || '待录入' }}</span>
+                  </div>
                   <div class="text-xs font-bold text-[#202124] truncate" :title="selectedRecord.email">{{ selectedRecord.email }}</div>
                 </div>
               </div>
@@ -1841,6 +1893,11 @@ onUnmounted(() => {
               <div class="grid grid-cols-2 gap-y-1.5 text-xs">
                 <div class="text-[#5f6368]">所属分组</div>
                 <div class="text-[#202124] font-medium truncate">{{ selectedRecord.group || "未分组" }}</div>
+
+                <div class="text-[#5f6368]">账号状态</div>
+                <div>
+                  <span :class="getStatusBadgeClass(selectedRecord.status)">{{ selectedRecord.status || '待录入' }}</span>
+                </div>
 
                 <div class="text-[#5f6368]">恢复邮箱</div>
                 <div class="text-[#1a73e8] font-medium truncate" :title="selectedRecord.recovery_email">{{ selectedRecord.recovery_email || "—" }}</div>
@@ -2025,15 +2082,12 @@ onUnmounted(() => {
               />
             </div>
             <div>
-              <label class="block text-xs font-semibold text-[#5f6368] mb-1">Google One 状态</label>
+              <label class="block text-xs font-semibold text-[#5f6368] mb-1">账号状态</label>
               <select
-                v-model="editForm.google_one_status"
-                class="w-full px-3 py-2 bg-[#f1f3f4] focus:bg-white rounded-xl border border-transparent focus:border-[#1a73e8] text-xs outline-none"
+                v-model="editForm.status"
+                class="w-full px-3 py-2 bg-[#f1f3f4] focus:bg-white rounded-xl border border-transparent focus:border-[#1a73e8] text-xs outline-none font-medium text-[#202124]"
               >
-                <option value="unknown">未验证</option>
-                <option value="active">有效（手动标记）</option>
-                <option value="expired">已失效</option>
-                <option value="inactive">非会员</option>
+                <option v-for="st in accountStatusOptions" :key="st" :value="st">{{ st }}</option>
               </select>
             </div>
           </div>
@@ -2069,22 +2123,37 @@ onUnmounted(() => {
             />
           </div>
 
-          <div class="grid grid-cols-2 gap-3">
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label class="block text-xs font-semibold text-[#5f6368] mb-1">Google One 方案</label>
-              <input
-                type="text"
+              <select
                 v-model="editForm.google_one_plan"
-                placeholder="100 GB / 2 TB..."
+                class="w-full px-3 py-2 bg-[#f1f3f4] focus:bg-white rounded-xl border border-transparent focus:border-[#1a73e8] text-xs outline-none font-medium text-[#202124]"
+              >
+                <option v-for="plan in googleOnePlanOptions" :key="plan" :value="plan">{{ plan }}</option>
+                <option v-if="editForm.google_one_plan && !googleOnePlanOptions.includes(editForm.google_one_plan)" :value="editForm.google_one_plan">
+                  {{ editForm.google_one_plan }} (自定义)
+                </option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-[#5f6368] mb-1">Google One 状态</label>
+              <select
+                v-model="editForm.google_one_status"
                 class="w-full px-3 py-2 bg-[#f1f3f4] focus:bg-white rounded-xl border border-transparent focus:border-[#1a73e8] text-xs outline-none"
-              />
+              >
+                <option value="unknown">未验证</option>
+                <option value="active">有效（手动标记）</option>
+                <option value="expired">已失效</option>
+                <option value="inactive">非会员</option>
+              </select>
             </div>
             <div>
               <label class="block text-xs font-semibold text-[#5f6368] mb-1">已用容量</label>
               <input
                 type="text"
                 v-model="editForm.google_one_used"
-                placeholder="15 GB / 350 GB..."
+                placeholder="例如 15 GB / 350 GB"
                 class="w-full px-3 py-2 bg-[#f1f3f4] focus:bg-white rounded-xl border border-transparent focus:border-[#1a73e8] text-xs outline-none"
               />
             </div>
@@ -2790,7 +2859,7 @@ onUnmounted(() => {
                     <h3 class="text-xs font-bold text-[#202124] flex items-center gap-2 flex-wrap">
                       <span>软件版本检查更新</span>
                       <span class="px-2 py-0.5 rounded-full bg-[#e8f0fe] text-[#1a73e8] text-[10px] font-mono font-bold whitespace-nowrap">
-                        当前: v3.0.2
+                        当前: v3.0.3
                       </span>
                     </h3>
                     <p class="text-[11px] text-[#5f6368] mt-0.5">
@@ -3019,7 +3088,7 @@ onUnmounted(() => {
               </div>
               <div>
                 <h3 class="text-base font-bold text-[#202124]">Google 账号管家</h3>
-                <p class="text-xs text-[#1a73e8] font-mono font-medium mt-0.5">v3.0.2 (Rust 2024 · Tauri 2.0 Native)</p>
+                <p class="text-xs text-[#1a73e8] font-mono font-medium mt-0.5">v3.0.3 (Rust 2024 · Tauri 2.0 Native)</p>
               </div>
               <p class="text-xs text-[#5f6368] max-w-md leading-relaxed">
                 面向专业运维与个人多账号管理的高性能轻量跨平台保险库，集成 RFC 6238 2FA 动态码、硬件级免密解锁（Windows Hello / 移动端生物识别）、多隔离环境浏览器会话与 WebDAV 端到端纯密文同步。

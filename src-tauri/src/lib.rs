@@ -166,6 +166,12 @@ fn save_record(
     }
     record.email = record.email.trim().to_string();
     record.group = record.group.trim().to_string();
+    if record.status.trim().is_empty() {
+        record.status = "待录入".to_string();
+    }
+    if record.google_one_plan.trim().is_empty() {
+        record.google_one_plan = "Free".to_string();
+    }
 
     let mut records = state.records.write();
     if let Some(pos) = records.iter().position(|r| r.id == record.id) {
@@ -333,7 +339,22 @@ fn batch_import_records(
             if !r.notes.trim().is_empty() {
                 existing.notes = r.notes;
             }
+            if !r.status.trim().is_empty() {
+                existing.status = r.status;
+            }
+            if !r.google_one_plan.trim().is_empty() {
+                existing.google_one_plan = r.google_one_plan;
+            }
+            if !r.google_one_status.trim().is_empty() {
+                existing.google_one_status = r.google_one_status;
+            }
         } else {
+            if r.status.trim().is_empty() {
+                r.status = "待录入".to_string();
+            }
+            if r.google_one_plan.trim().is_empty() {
+                r.google_one_plan = "Free".to_string();
+            }
             records.push(r);
         }
         imported_count += 1;
@@ -546,7 +567,7 @@ async fn check_github_update(repo: Option<String>) -> Result<UpdateInfo, String>
     );
 
     let client = reqwest::Client::builder()
-        .user_agent("google-account-vault/3.0.2")
+        .user_agent("google-account-vault/3.0.3")
         .timeout(std::time::Duration::from_secs(8))
         .build()
         .map_err(|e| format!("构建 HTTP 客户端失败: {e}"))?;
@@ -559,8 +580,8 @@ async fn check_github_update(repo: Option<String>) -> Result<UpdateInfo, String>
 
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(UpdateInfo {
-            current_version: "3.0.2".to_string(),
-            latest_version: "3.0.2".to_string(),
+            current_version: "3.0.3".to_string(),
+            latest_version: "3.0.3".to_string(),
             has_update: false,
             release_name: "暂无发布版本".to_string(),
             release_notes: format!("仓库 {} 尚未发布任何公开 Release", target_repo),
@@ -585,7 +606,7 @@ async fn check_github_update(repo: Option<String>) -> Result<UpdateInfo, String>
     let json: serde_json::Value =
         serde_json::from_str(&body).map_err(|e| format!("解析 Release JSON 失败: {e}"))?;
 
-    let tag = json["tag_name"].as_str().unwrap_or("3.0.2").to_string();
+    let tag = json["tag_name"].as_str().unwrap_or("3.0.3").to_string();
     let name = json["name"].as_str().unwrap_or(&tag).to_string();
     let notes = json["body"].as_str().unwrap_or("").to_string();
     let published_at = json["published_at"].as_str().unwrap_or("").to_string();
@@ -642,12 +663,12 @@ async fn check_github_update(repo: Option<String>) -> Result<UpdateInfo, String>
     #[cfg(not(target_os = "android"))]
     let download_url = setup_url.clone().or_else(|| portable_url.clone());
 
-    let current = (3, 0, 2);
+    let current = (3, 0, 3);
     let latest = parse_semver(&tag);
     let has_update = latest > current;
 
     Ok(UpdateInfo {
-        current_version: "3.0.2".to_string(),
+        current_version: "3.0.3".to_string(),
         latest_version: tag,
         has_update,
         release_name: name,
@@ -677,7 +698,7 @@ async fn start_auto_update(app: tauri::AppHandle, url: String) -> Result<(), Str
     use tauri::Emitter;
 
     let client = reqwest::Client::builder()
-        .user_agent("google-account-vault/3.0.2")
+        .user_agent("google-account-vault/3.0.3")
         .build()
         .map_err(|e| format!("初始化下载客户端失败: {e}"))?;
 
