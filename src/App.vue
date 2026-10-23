@@ -1055,6 +1055,61 @@ async function handleRestoreBackup(filename: string) {
   }
 }
 
+async function handleExportGvault() {
+  try {
+    const encryptedContent = await invoke<string>("export_encrypted_vault_string");
+    const blob = new Blob([encryptedContent], { type: "application/json;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    const now = new Date();
+    const dateStr = now.toISOString().slice(0, 10).replace(/-/g, "");
+    link.download = `GoogleAccountVault_${dateStr}.gvault`;
+    link.click();
+    URL.revokeObjectURL(url);
+    notify("🛡️ 密文保险库文件 (.gvault) 已成功导出并保存", "success", 3000);
+  } catch (err: any) {
+    notify("导出密文保险库失败: " + err, "error");
+  }
+}
+
+function triggerImportGvaultFile() {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = ".gvault,.json";
+  input.onchange = async (e: any) => {
+    const file = e.target?.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      await handleImportGvaultBlob(text, file.name);
+    } catch (err: any) {
+      notify("读取文件失败: " + err, "error");
+    }
+  };
+  input.click();
+}
+
+async function handleImportGvaultBlob(blob: string, fileName: string) {
+  const confirmed = await askConfirm({
+    title: "确认导入密文保险库？",
+    message: `确定要从密文文件 [${fileName}] 导入并合并账号吗？\n将使用当前主密码进行 AES-256-GCM 解密，如有重复邮箱将自动更新。`,
+    type: "info",
+    confirmText: "确认导入",
+    cancelText: "取消"
+  });
+  if (!confirmed) return;
+
+  try {
+    const count = await invoke<number>("import_encrypted_vault_blob", { blob });
+    records.value = await invoke<AccountRecord[]>("get_records");
+    updateAllTotp();
+    notify(`🎉 成功从密文文件导入并更新了 ${count} 条账号记录！`, "success", 4000);
+  } catch (err: any) {
+    notify("导入密文保险库失败（请核对主密码是否一致）: " + err, "error", 6000);
+  }
+}
+
 async function handleExportCsv() {
   try {
     const csvContent = await invoke<string>("export_records_csv_string");
@@ -1401,7 +1456,7 @@ onUnmounted(() => {
           </div>
           <div class="flex items-baseline gap-2">
             <span class="font-bold text-base text-[#202124] tracking-tight">Google 账号管家</span>
-            <span class="text-[11px] font-semibold uppercase px-2 py-0.5 bg-[#e8f0fe] text-[#1a73e8] rounded-full">v3.0.3 Rust</span>
+            <span class="text-[11px] font-semibold uppercase px-2 py-0.5 bg-[#e8f0fe] text-[#1a73e8] rounded-full">v3.0.4 Rust</span>
           </div>
         </div>
 
@@ -2778,7 +2833,7 @@ onUnmounted(() => {
                   backupTab === 'export' ? 'bg-white text-[#1a73e8] shadow-sm font-semibold' : 'text-[#5f6368] hover:text-[#202124]'
                 ]"
               >
-                明文数据格式导出
+                数据导出与密文备份
               </button>
             </div>
 
@@ -2813,11 +2868,47 @@ onUnmounted(() => {
 
             <!-- Sub-Tab 2: Export Options -->
             <div v-else class="space-y-3 py-1">
+              <!-- Encrypted .gvault Card (Recommended) -->
+              <div class="p-4 bg-gradient-to-br from-emerald-50 via-teal-50/30 to-blue-50/40 rounded-2xl border border-emerald-200/90 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
+                <div class="space-y-1">
+                  <div class="flex items-center gap-2">
+                    <span class="p-1 rounded-lg bg-emerald-100 text-emerald-800">
+                      <Lock class="w-3.5 h-3.5" />
+                    </span>
+                    <h3 class="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
+                      <span>导出密文保险库文件 (.gvault)</span>
+                      <span class="px-2 py-0.2 rounded-full bg-emerald-200/70 text-emerald-800 text-[9px] font-semibold">强烈推荐</span>
+                    </h3>
+                  </div>
+                  <p class="text-[11px] text-emerald-800/85 leading-relaxed max-w-xl">
+                    采用 <strong>AES-256-GCM + Scrypt 军事级强加密</strong>，所有账号与 2FA 密匙以高强密文封装。可在任意设备上直接导入无损还原，安全防泄露。
+                  </p>
+                </div>
+                <div class="flex items-center gap-2 flex-wrap sm:flex-nowrap flex-shrink-0">
+                  <button
+                    @click="triggerImportGvaultFile"
+                    class="w-full sm:w-auto px-3.5 py-2 bg-white hover:bg-[#f1f3f4] text-emerald-900 border border-emerald-300 rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shadow-2xs"
+                    title="选择本地 .gvault 密文文件导入并解密合并"
+                  >
+                    <Upload class="w-3.5 h-3.5 text-emerald-700" />
+                    <span>导入 .gvault</span>
+                  </button>
+                  <button
+                    @click="handleExportGvault"
+                    class="w-full sm:w-auto px-4 py-2 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer whitespace-nowrap"
+                  >
+                    <Download class="w-3.5 h-3.5" />
+                    <span>导出加密 .gvault</span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- Plain CSV Card -->
               <div class="p-3.5 bg-[#f8fafd] rounded-2xl border border-[#dadce0] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div class="space-y-1">
                   <h3 class="text-xs font-bold text-[#202124]">导出为标准 CSV 表格文件</h3>
                   <p class="text-[11px] text-[#5f6368] leading-relaxed">
-                    包含邮箱、登录密码、分组、辅助邮箱、TOTP密钥、备用验证码等全部字段，支持 Excel/Numbers 打开。
+                    包含邮箱、登录密码、账号状态、分组、辅助邮箱、TOTP密钥、备用验证码等全部明文字段，支持 Excel/Numbers 打开。
                   </p>
                 </div>
                 <button
@@ -2825,10 +2916,11 @@ onUnmounted(() => {
                   class="w-full sm:w-auto px-4 py-2 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 shadow-sm transition-all cursor-pointer whitespace-nowrap flex-shrink-0"
                 >
                   <FileText class="w-3.5 h-3.5" />
-                  <span>导出 CSV</span>
+                  <span>导出明文 CSV</span>
                 </button>
               </div>
 
+              <!-- Plain JSON Card -->
               <div class="p-3.5 bg-[#f8fafd] rounded-2xl border border-[#dadce0] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div class="space-y-1">
                   <h3 class="text-xs font-bold text-[#202124]">导出为 JSON 数据格式</h3>
@@ -2841,7 +2933,7 @@ onUnmounted(() => {
                   class="w-full sm:w-auto px-4 py-2 bg-white hover:bg-[#f1f3f4] text-[#3c4043] border border-[#dadce0] rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap flex-shrink-0"
                 >
                   <Download class="w-3.5 h-3.5 text-[#1a73e8]" />
-                  <span>导出 JSON</span>
+                  <span>导出明文 JSON</span>
                 </button>
               </div>
             </div>
@@ -2859,7 +2951,7 @@ onUnmounted(() => {
                     <h3 class="text-xs font-bold text-[#202124] flex items-center gap-2 flex-wrap">
                       <span>软件版本检查更新</span>
                       <span class="px-2 py-0.5 rounded-full bg-[#e8f0fe] text-[#1a73e8] text-[10px] font-mono font-bold whitespace-nowrap">
-                        当前: v3.0.3
+                        当前: v3.0.4
                       </span>
                     </h3>
                     <p class="text-[11px] text-[#5f6368] mt-0.5">
@@ -3088,7 +3180,7 @@ onUnmounted(() => {
               </div>
               <div>
                 <h3 class="text-base font-bold text-[#202124]">Google 账号管家</h3>
-                <p class="text-xs text-[#1a73e8] font-mono font-medium mt-0.5">v3.0.3 (Rust 2024 · Tauri 2.0 Native)</p>
+                <p class="text-xs text-[#1a73e8] font-mono font-medium mt-0.5">v3.0.4 (Rust 2024 · Tauri 2.0 Native)</p>
               </div>
               <p class="text-xs text-[#5f6368] max-w-md leading-relaxed">
                 面向专业运维与个人多账号管理的高性能轻量跨平台保险库，集成 RFC 6238 2FA 动态码、硬件级免密解锁（Windows Hello / 移动端生物识别）、多隔离环境浏览器会话与 WebDAV 端到端纯密文同步。

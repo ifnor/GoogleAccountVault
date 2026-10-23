@@ -294,6 +294,58 @@ fn export_records_csv_string(state: State<'_, AppState>) -> Result<String, Strin
 }
 
 #[tauri::command]
+fn export_encrypted_vault_string(state: State<'_, AppState>) -> Result<String, String> {
+    let password_lock = state.master_password.read();
+    let password = password_lock.as_ref().ok_or("保险库已锁定，无法导出密文文件")?;
+
+    let records = state.records.read();
+    if let Some((key, salt)) = state.vault_key.read().as_ref() {
+        vault::encrypt_records_with_key(&records, key, salt)
+    } else {
+        vault::encrypt_records(&records, password)
+    }
+}
+
+#[tauri::command]
+fn import_encrypted_vault_blob(
+    blob: String,
+    password_override: Option<String>,
+    state: State<'_, AppState>,
+) -> Result<usize, String> {
+    let password_lock = state.master_password.read();
+    let current_password = password_lock
+        .as_ref()
+        .ok_or("保险库已锁定，请先解锁后再导入")?;
+    let pwd = password_override.as_deref().unwrap_or(current_password);
+
+    let (imported, _, _) = vault::decrypt_records(&blob, pwd)?;
+    let count = imported.len();
+    if count == 0 {
+        return Ok(0);
+    }
+
+    let mut records = state.records.write();
+    for r in imported {
+        if let Some(pos) = records
+            .iter()
+            .position(|existing| existing.email.eq_ignore_ascii_case(&r.email))
+        {
+            records[pos] = r;
+        } else {
+            records.push(r);
+        }
+    }
+
+    if let Some((key, salt)) = state.vault_key.read().as_ref() {
+        vault::save_vault_atomic_with_key(&records, key, salt, 30)?;
+    } else {
+        vault::save_vault_atomic(&records, current_password, 30)?;
+    }
+
+    Ok(count)
+}
+
+#[tauri::command]
 fn batch_import_records(
     new_records: Vec<AccountRecord>,
     state: State<'_, AppState>,
@@ -567,7 +619,7 @@ async fn check_github_update(repo: Option<String>) -> Result<UpdateInfo, String>
     );
 
     let client = reqwest::Client::builder()
-        .user_agent("google-account-vault/3.0.3")
+        .user_agent("google-account-vault/3.0.4")
         .timeout(std::time::Duration::from_secs(8))
         .build()
         .map_err(|e| format!("构建 HTTP 客户端失败: {e}"))?;
@@ -580,8 +632,8 @@ async fn check_github_update(repo: Option<String>) -> Result<UpdateInfo, String>
 
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(UpdateInfo {
-            current_version: "3.0.3".to_string(),
-            latest_version: "3.0.3".to_string(),
+            current_version: "3.0.4".to_string(),
+            latest_version: "3.0.4".to_string(),
             has_update: false,
             release_name: "暂无发布版本".to_string(),
             release_notes: format!("仓库 {} 尚未发布任何公开 Release", target_repo),
@@ -606,7 +658,7 @@ async fn check_github_update(repo: Option<String>) -> Result<UpdateInfo, String>
     let json: serde_json::Value =
         serde_json::from_str(&body).map_err(|e| format!("解析 Release JSON 失败: {e}"))?;
 
-    let tag = json["tag_name"].as_str().unwrap_or("3.0.3").to_string();
+    let tag = json["tag_name"].as_str().unwrap_or("3.0.4").to_string();
     let name = json["name"].as_str().unwrap_or(&tag).to_string();
     let notes = json["body"].as_str().unwrap_or("").to_string();
     let published_at = json["published_at"].as_str().unwrap_or("").to_string();
@@ -663,12 +715,12 @@ async fn check_github_update(repo: Option<String>) -> Result<UpdateInfo, String>
     #[cfg(not(target_os = "android"))]
     let download_url = setup_url.clone().or_else(|| portable_url.clone());
 
-    let current = (3, 0, 3);
+    let current = (3, 0, 4);
     let latest = parse_semver(&tag);
     let has_update = latest > current;
 
     Ok(UpdateInfo {
-        current_version: "3.0.3".to_string(),
+        current_version: "3.0.4".to_string(),
         latest_version: tag,
         has_update,
         release_name: name,
@@ -698,7 +750,7 @@ async fn start_auto_update(app: tauri::AppHandle, url: String) -> Result<(), Str
     use tauri::Emitter;
 
     let client = reqwest::Client::builder()
-        .user_agent("google-account-vault/3.0.3")
+        .user_agent("google-account-vault/3.0.4")
         .build()
         .map_err(|e| format!("初始化下载客户端失败: {e}"))?;
 
@@ -865,6 +917,8 @@ pub fn run() {
             list_vault_backups,
             restore_vault_backup,
             export_records_csv_string,
+            export_encrypted_vault_string,
+            import_encrypted_vault_blob,
             batch_import_records,
             check_windows_hello_status,
             enable_windows_hello,
