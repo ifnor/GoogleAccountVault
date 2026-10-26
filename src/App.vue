@@ -1499,7 +1499,7 @@ onUnmounted(() => {
           </div>
           <div class="flex items-baseline gap-2">
             <span class="font-bold text-base text-[#202124] tracking-tight">Google 账号管家</span>
-            <span class="text-[11px] font-semibold uppercase px-2 py-0.5 bg-[#e8f0fe] text-[#1a73e8] rounded-full">v3.0.7</span>
+            <span class="text-[11px] font-semibold uppercase px-2 py-0.5 bg-[#e8f0fe] text-[#1a73e8] rounded-full">v3.0.8</span>
           </div>
         </div>
 
@@ -2997,7 +2997,7 @@ onUnmounted(() => {
                     <h3 class="text-xs font-bold text-[#202124] flex items-center gap-2 flex-wrap">
                       <span>软件版本检查更新</span>
                       <span class="px-2 py-0.5 rounded-full bg-[#e8f0fe] text-[#1a73e8] text-[10px] font-mono font-bold whitespace-nowrap">
-                        当前: v3.0.7
+                        当前: v3.0.8
                       </span>
                     </h3>
                     <p class="text-[11px] text-[#5f6368] mt-0.5">
@@ -3244,7 +3244,7 @@ onUnmounted(() => {
               </div>
               <div>
                 <h3 class="text-base font-bold text-[#202124]">Google 账号管家</h3>
-                <p class="text-xs text-[#1a73e8] font-mono font-medium mt-0.5">v3.0.7 (Rust 2024 · Tauri 2.0 Native)</p>
+                <p class="text-xs text-[#1a73e8] font-mono font-medium mt-0.5">v3.0.8</p>
               </div>
               <p class="text-xs text-[#5f6368] max-w-md leading-relaxed">
                 面向专业运维与个人多账号管理的高性能轻量跨平台保险库，集成 RFC 6238 2FA 动态码、硬件级免密解锁（Windows Hello / 移动端生物识别）、多隔离环境浏览器会话与 WebDAV 端到端纯密文同步。
@@ -3261,15 +3261,9 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-              <div class="p-3 bg-[#f8fafd] rounded-xl border border-[#dadce0]">
-                <div class="font-bold text-[#202124]">核心架构</div>
-                <div class="text-[11px] text-[#5f6368] mt-1 font-mono">Rust 2024 · Tauri 2.0 · Vue 3.5</div>
-              </div>
-              <div class="p-3 bg-[#f8fafd] rounded-xl border border-[#dadce0]">
-                <div class="font-bold text-[#202124]">安全标准</div>
-                <div class="text-[11px] text-[#5f6368] mt-1 font-mono">{{ isMobilePlatform ? 'AES-256-GCM · Scrypt · Keystore' : 'AES-256-GCM · Scrypt · DPAPI' }}</div>
-              </div>
+            <div class="p-3 bg-[#f8fafd] rounded-xl border border-[#dadce0] text-xs">
+              <div class="font-bold text-[#202124]">安全标准</div>
+              <div class="text-[11px] text-[#5f6368] mt-1 font-mono">{{ isMobilePlatform ? 'AES-256-GCM · Scrypt · Keystore' : 'AES-256-GCM · Scrypt · DPAPI' }}</div>
             </div>
           </div>
 
