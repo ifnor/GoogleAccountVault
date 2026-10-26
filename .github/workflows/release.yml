@@ -57,6 +57,24 @@ jobs:
             Copy-Item $portable -Destination "artifacts/GoogleAccountVault_Portable.exe"
           }
 
+      - name: Sign Windows executables (Authenticode)
+        shell: pwsh
+        run: |
+          $signtool = (Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe" -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+          if (-not $signtool) {
+            $signtool = (Get-ChildItem -Path "C:\Program Files (x86)\Windows Kits\10\bin" -Filter "signtool.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+          }
+          Write-Host "Found signtool at: $signtool"
+          $cert = "src-tauri/certs/ifnor.pfx"
+          if (Test-Path $cert) {
+            if (Test-Path "artifacts/GoogleAccountVault_Setup.exe") {
+              & $signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f $cert /p ifnor2026 "artifacts/GoogleAccountVault_Setup.exe"
+            }
+            if (Test-Path "artifacts/GoogleAccountVault_Portable.exe") {
+              & $signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /f $cert /p ifnor2026 "artifacts/GoogleAccountVault_Portable.exe"
+            }
+          }
+
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
