@@ -999,9 +999,15 @@ async function openExternalUrl(url?: string | null) {
 }
 
 async function startAutoUpdate(targetUrl?: string) {
-  const url = targetUrl || updateResult.value?.setup_url || updateResult.value?.download_url;
+  let defaultUrl: string | null = null;
+  if (isMobilePlatform.value) {
+    defaultUrl = updateResult.value?.apk_url || updateResult.value?.download_url || null;
+  } else {
+    defaultUrl = updateResult.value?.setup_url || updateResult.value?.download_url || null;
+  }
+  const url = targetUrl || defaultUrl;
   if (!url) {
-    notify("未找到有效下载地址，请尝试浏览器下载", "error");
+    notify("未找到有效下载地址，请尝试浏览器备用下载", "error");
     return;
   }
 
@@ -1508,7 +1514,7 @@ onUnmounted(() => {
           </div>
           <div class="flex items-baseline gap-2">
             <span class="font-bold text-base text-[#202124] tracking-tight">Google 账号管家</span>
-            <span class="text-[11px] font-semibold uppercase px-2 py-0.5 bg-[#e8f0fe] text-[#1a73e8] rounded-full">v3.1.2</span>
+            <span class="text-[11px] font-semibold uppercase px-2 py-0.5 bg-[#e8f0fe] text-[#1a73e8] rounded-full">v3.1.3</span>
           </div>
         </div>
 
@@ -3006,7 +3012,7 @@ onUnmounted(() => {
                     <h3 class="text-xs font-bold text-[#202124] flex items-center gap-2 flex-wrap">
                       <span>软件版本检查更新</span>
                       <span class="px-2 py-0.5 rounded-full bg-[#e8f0fe] text-[#1a73e8] text-[10px] font-mono font-bold whitespace-nowrap">
-                        当前: v3.1.2
+                        当前: v3.1.3
                       </span>
                     </h3>
                     <p class="text-[11px] text-[#5f6368] mt-0.5">
@@ -3107,10 +3113,10 @@ onUnmounted(() => {
                     </div>
                   </div>
 
-                  <!-- Primary Action: In-app auto-update on desktop / Direct APK on mobile -->
+                  <!-- Primary Action: In-app auto-update on desktop & mobile with browser fallback -->
                   <div class="flex items-center gap-2 flex-wrap sm:flex-nowrap">
                     <button
-                      v-if="!isDownloadingUpdate && !isMobilePlatform"
+                      v-if="!isDownloadingUpdate"
                       @click="startAutoUpdate()"
                       class="w-full sm:w-auto px-4 py-2 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white rounded-xl text-xs font-semibold shadow-sm transition-all flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap flex-shrink-0"
                     >
@@ -3119,12 +3125,13 @@ onUnmounted(() => {
                     </button>
 
                     <button
-                      v-if="isMobilePlatform"
-                      @click="openExternalUrl(updateResult.apk_url || updateResult.download_url || updateResult.release_url)"
-                      class="w-full sm:w-auto px-4 py-2 bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white rounded-xl text-xs font-semibold shadow-sm transition-all flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap flex-shrink-0"
+                      v-if="!isDownloadingUpdate"
+                      @click="openExternalUrl(isMobilePlatform ? (updateResult.apk_url || updateResult.download_url || updateResult.release_url) : (updateResult.setup_url || updateResult.portable_url || updateResult.release_url))"
+                      class="w-full sm:w-auto px-3 py-2 bg-white hover:bg-emerald-50 text-emerald-800 border border-emerald-300 rounded-xl text-xs font-medium transition-all flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap flex-shrink-0"
+                      title="遇到特殊权限拦截时，可直接通过浏览器下载安装包"
                     >
                       <Download class="w-3.5 h-3.5" />
-                      <span>立即下载 APK 安装包</span>
+                      <span>浏览器备用下载</span>
                     </button>
                   </div>
                 </div>
@@ -3145,7 +3152,7 @@ onUnmounted(() => {
                     ></div>
                   </div>
                   <p class="text-[10px] text-emerald-700">
-                    下载完成后将自动启动最新版安装包进行无缝升级并退出当前版本。
+                    {{ isMobilePlatform ? '下载完成后将自动调起系统包安装器进行无缝覆盖升级。' : '下载完成后将自动启动最新版安装包进行无缝升级并退出当前版本。' }}
                   </p>
                 </div>
 
@@ -3222,11 +3229,19 @@ onUnmounted(() => {
                       </div>
                       <div class="flex items-center gap-1.5 mt-1">
                         <button
-                          @click="openExternalUrl(updateResult.apk_url || updateResult.release_url)"
-                          class="flex-1 py-1 px-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] font-medium transition-colors cursor-pointer text-center flex items-center justify-center gap-1"
+                          @click="startAutoUpdate(updateResult.apk_url || undefined)"
+                          :disabled="isDownloadingUpdate"
+                          class="flex-1 py-1 px-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] font-medium transition-colors cursor-pointer text-center"
                         >
-                          <Download class="w-3 h-3" />
-                          <span>下载 APK 安装包</span>
+                          一键更新
+                        </button>
+                        <button
+                          @click="openExternalUrl(updateResult.apk_url || updateResult.release_url)"
+                          class="py-1 px-2 bg-white hover:bg-[#f1f3f4] text-[#5f6368] border border-[#dadce0] rounded-lg text-[11px] font-medium transition-colors cursor-pointer text-center"
+                          title="备用：浏览器直接下载"
+                        >
+                          <Download class="w-3 h-3 inline mr-0.5" />
+                          下载
                         </button>
                       </div>
                     </div>
@@ -3270,7 +3285,7 @@ onUnmounted(() => {
               </div>
               <div>
                 <h3 class="text-base font-bold text-[#202124]">Google 账号管家</h3>
-                <p class="text-xs text-[#1a73e8] font-mono font-medium mt-0.5">v3.1.2</p>
+                <p class="text-xs text-[#1a73e8] font-mono font-medium mt-0.5">v3.1.3</p>
               </div>
               <p class="text-xs text-[#5f6368] max-w-md leading-relaxed">
                 面向专业运维与个人多账号管理的高性能轻量跨平台保险库，集成 RFC 6238 2FA 动态码、硬件级免密解锁（Windows Hello / 移动端生物识别）、多隔离环境浏览器会话与 WebDAV 端到端纯密文同步。

@@ -643,7 +643,7 @@ async fn check_github_update(
     });
 
     let client = reqwest::Client::builder()
-        .user_agent("google-account-vault/3.1.2")
+        .user_agent("google-account-vault/3.1.3")
         .timeout(std::time::Duration::from_secs(8))
         .build()
         .map_err(|e| format!("构建 HTTP 客户端失败: {e}"))?;
@@ -662,8 +662,8 @@ async fn check_github_update(
 
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(UpdateInfo {
-            current_version: "3.1.2".to_string(),
-            latest_version: "3.1.2".to_string(),
+            current_version: "3.1.3".to_string(),
+            latest_version: "3.1.3".to_string(),
             has_update: false,
             release_name: "暂无发布版本".to_string(),
             release_notes: format!("仓库 {} 尚未发布任何公开 Release", target_repo),
@@ -688,7 +688,7 @@ async fn check_github_update(
     let json: serde_json::Value =
         serde_json::from_str(&body).map_err(|e| format!("解析 Release JSON 失败: {e}"))?;
 
-    let tag = json["tag_name"].as_str().unwrap_or("3.1.2").to_string();
+    let tag = json["tag_name"].as_str().unwrap_or("3.1.3").to_string();
     let name = json["name"].as_str().unwrap_or(&tag).to_string();
     let notes = json["body"].as_str().unwrap_or("").to_string();
     let published_at = json["published_at"].as_str().unwrap_or("").to_string();
@@ -751,12 +751,12 @@ async fn check_github_update(
     #[cfg(not(target_os = "android"))]
     let download_url = setup_url.clone().or_else(|| portable_url.clone());
 
-    let current = (3, 1, 2);
+    let current = (3, 1, 3);
     let latest = parse_semver(&tag);
     let has_update = latest > current;
 
     Ok(UpdateInfo {
-        current_version: "3.1.2".to_string(),
+        current_version: "3.1.3".to_string(),
         latest_version: tag,
         has_update,
         release_name: name,
@@ -779,6 +779,54 @@ fn open_external_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
         .map_err(|e| format!("打开系统浏览器链接失败: {e}"))
 }
 
+#[cfg(target_os = "android")]
+fn install_apk_android(apk_path: &str) -> Result<(), String> {
+    let ctx = ndk_context::android_context();
+    let vm_ptr = ctx.vm();
+    if vm_ptr.is_null() {
+        return Err("获取 Android JavaVM 失败".to_string());
+    }
+    let context_ptr = ctx.context();
+    if context_ptr.is_null() {
+        return Err("获取 Android Context 失败".to_string());
+    }
+
+    let vm = unsafe { jni::JavaVM::from_raw(vm_ptr.cast()) }
+        .map_err(|e| format!("初始化 JavaVM 句柄失败: {e}"))?;
+
+    let mut env = vm
+        .attach_current_thread()
+        .map_err(|e| format!("附加当前线程至 JVM 失败: {e}"))?;
+
+    let context_obj = unsafe { jni::objects::JObject::from_raw(context_ptr.cast()) };
+    let path_jstring = env
+        .new_string(apk_path)
+        .map_err(|e| format!("创建 APK 路径字符串失败: {e}"))?;
+
+    let class = env
+        .find_class("com/google/accountvault/MainActivity")
+        .map_err(|e| format!("未找到 MainActivity 类: {e}"))?;
+
+    let res = env
+        .call_static_method(
+            class,
+            "installApk",
+            "(Landroid/content/Context;Ljava/lang/String;)Z",
+            &[
+                jni::objects::JValue::from(&context_obj),
+                jni::objects::JValue::from(&path_jstring),
+            ],
+        )
+        .map_err(|e| format!("调用 MainActivity.installApk 失败: {e}"))?;
+
+    let success = res.z().unwrap_or(false);
+    if !success {
+        return Err("调用系统安装器失败，请检查文件权限或允许安装未知应用".to_string());
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 async fn start_auto_update(app: tauri::AppHandle, url: String) -> Result<(), String> {
     use futures_util::StreamExt;
@@ -786,7 +834,7 @@ async fn start_auto_update(app: tauri::AppHandle, url: String) -> Result<(), Str
     use tauri::Emitter;
 
     let client = reqwest::Client::builder()
-        .user_agent("google-account-vault/3.1.2")
+        .user_agent("google-account-vault/3.1.3")
         .build()
         .map_err(|e| format!("初始化下载客户端失败: {e}"))?;
 
@@ -801,10 +849,30 @@ async fn start_auto_update(app: tauri::AppHandle, url: String) -> Result<(), Str
     }
 
     let total_bytes = resp.content_length().unwrap_or(0);
-    let is_setup = url.to_lowercase().contains("setup") || !url.to_lowercase().contains("portable");
+    let url_lower = url.to_lowercase();
+    let is_apk = url_lower.ends_with(".apk") || url_lower.contains(".apk?");
+    let is_setup = url_lower.contains("setup") || (!url_lower.contains("portable") && !is_apk);
 
-    let temp_dir = std::env::temp_dir();
-    let temp_file_path = if is_setup {
+    let temp_dir = {
+        #[cfg(target_os = "android")]
+        {
+            use tauri::Manager;
+            app.path()
+                .app_cache_dir()
+                .or_else(|_| app.path().cache_dir())
+                .unwrap_or_else(|_| std::env::temp_dir())
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            std::env::temp_dir()
+        }
+    };
+
+    let _ = std::fs::create_dir_all(&temp_dir);
+
+    let temp_file_path = if is_apk {
+        temp_dir.join("GoogleAccountVault_Update.apk")
+    } else if is_setup {
         temp_dir.join("GoogleAccountVault_Update_Setup.exe")
     } else {
         temp_dir.join("GoogleAccountVault_Update_Portable.exe")
@@ -881,7 +949,13 @@ async fn start_auto_update(app: tauri::AppHandle, url: String) -> Result<(), Str
         }
     }
 
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "android")]
+    {
+        let path_str = temp_file_path.to_string_lossy().to_string();
+        install_apk_android(&path_str)?;
+    }
+
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
     {
         use tauri_plugin_opener::OpenerExt;
         let _ = app.opener().open_url(&url, None::<&str>);
