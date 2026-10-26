@@ -595,7 +595,36 @@ pub struct UpdateInfo {
     pub setup_url: Option<String>,
     pub portable_url: Option<String>,
     pub apk_url: Option<String>,
+    pub current_install_type: String,
     pub assets: Vec<ReleaseAsset>,
+}
+
+fn detect_install_type() -> &'static str {
+    #[cfg(target_os = "android")]
+    {
+        "android"
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Some(parent) = exe_path.parent() {
+                if parent.join("uninstall.exe").exists()
+                    || parent.join("Uninstall Google 账号管家.exe").exists()
+                {
+                    return "setup";
+                }
+                let path_str = parent.to_string_lossy().to_lowercase();
+                if path_str.contains("program files") || path_str.contains("programs") {
+                    return "setup";
+                }
+            }
+        }
+        "portable"
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "android")))]
+    {
+        "desktop"
+    }
 }
 
 fn parse_semver(v: &str) -> (u32, u32, u32) {
@@ -643,7 +672,7 @@ async fn check_github_update(
     });
 
     let client = reqwest::Client::builder()
-        .user_agent("google-account-vault/3.1.3")
+        .user_agent("google-account-vault/3.1.4")
         .timeout(std::time::Duration::from_secs(8))
         .build()
         .map_err(|e| format!("构建 HTTP 客户端失败: {e}"))?;
@@ -662,8 +691,8 @@ async fn check_github_update(
 
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(UpdateInfo {
-            current_version: "3.1.3".to_string(),
-            latest_version: "3.1.3".to_string(),
+            current_version: "3.1.4".to_string(),
+            latest_version: "3.1.4".to_string(),
             has_update: false,
             release_name: "暂无发布版本".to_string(),
             release_notes: format!("仓库 {} 尚未发布任何公开 Release", target_repo),
@@ -673,6 +702,7 @@ async fn check_github_update(
             setup_url: None,
             portable_url: None,
             apk_url: None,
+            current_install_type: detect_install_type().to_string(),
             assets: Vec::new(),
         });
     }
@@ -688,7 +718,7 @@ async fn check_github_update(
     let json: serde_json::Value =
         serde_json::from_str(&body).map_err(|e| format!("解析 Release JSON 失败: {e}"))?;
 
-    let tag = json["tag_name"].as_str().unwrap_or("3.1.3").to_string();
+    let tag = json["tag_name"].as_str().unwrap_or("3.1.4").to_string();
     let name = json["name"].as_str().unwrap_or(&tag).to_string();
     let notes = json["body"].as_str().unwrap_or("").to_string();
     let published_at = json["published_at"].as_str().unwrap_or("").to_string();
@@ -746,17 +776,19 @@ async fn check_github_update(
         }
     }
 
-    #[cfg(target_os = "android")]
-    let download_url = apk_url.clone();
-    #[cfg(not(target_os = "android"))]
-    let download_url = setup_url.clone().or_else(|| portable_url.clone());
+    let install_type = detect_install_type();
+    let download_url = match install_type {
+        "android" => apk_url.clone(),
+        "portable" => portable_url.clone().or_else(|| setup_url.clone()),
+        _ => setup_url.clone().or_else(|| portable_url.clone()),
+    };
 
-    let current = (3, 1, 3);
+    let current = (3, 1, 4);
     let latest = parse_semver(&tag);
     let has_update = latest > current;
 
     Ok(UpdateInfo {
-        current_version: "3.1.3".to_string(),
+        current_version: "3.1.4".to_string(),
         latest_version: tag,
         has_update,
         release_name: name,
@@ -767,6 +799,7 @@ async fn check_github_update(
         setup_url,
         portable_url,
         apk_url,
+        current_install_type: install_type.to_string(),
         assets: asset_list,
     })
 }
@@ -834,7 +867,7 @@ async fn start_auto_update(app: tauri::AppHandle, url: String) -> Result<(), Str
     use tauri::Emitter;
 
     let client = reqwest::Client::builder()
-        .user_agent("google-account-vault/3.1.3")
+        .user_agent("google-account-vault/3.1.4")
         .build()
         .map_err(|e| format!("初始化下载客户端失败: {e}"))?;
 

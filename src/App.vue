@@ -920,6 +920,7 @@ interface UpdateInfo {
   setup_url: string | null;
   portable_url: string | null;
   apk_url: string | null;
+  current_install_type: string;
   assets: ReleaseAsset[];
 }
 type UpdateMirror = "gh-proxy" | "ghproxy" | "official";
@@ -938,6 +939,16 @@ function setUpdateMirror(mirror: UpdateMirror) {
 const isCheckingUpdate = ref(false);
 const updateResult = ref<UpdateInfo | null>(null);
 const updateError = ref("");
+
+const currentInstallTypeName = computed(() => {
+  if (isMobilePlatform.value || updateResult.value?.current_install_type === "android") {
+    return "Android 手机版";
+  }
+  if (updateResult.value?.current_install_type === "portable") {
+    return "Windows 绿色便携版";
+  }
+  return "Windows 安装版";
+});
 const isDownloadingUpdate = ref(false);
 const downloadProgress = ref(0);
 const downloadStatusText = ref("");
@@ -999,13 +1010,10 @@ async function openExternalUrl(url?: string | null) {
 }
 
 async function startAutoUpdate(targetUrl?: string) {
-  let defaultUrl: string | null = null;
-  if (isMobilePlatform.value) {
-    defaultUrl = updateResult.value?.apk_url || updateResult.value?.download_url || null;
-  } else {
-    defaultUrl = updateResult.value?.setup_url || updateResult.value?.download_url || null;
-  }
-  const url = targetUrl || defaultUrl;
+  const url =
+    targetUrl ||
+    updateResult.value?.download_url ||
+    (isMobilePlatform.value ? updateResult.value?.apk_url : updateResult.value?.setup_url);
   if (!url) {
     notify("未找到有效下载地址，请尝试浏览器备用下载", "error");
     return;
@@ -1514,7 +1522,7 @@ onUnmounted(() => {
           </div>
           <div class="flex items-baseline gap-2">
             <span class="font-bold text-base text-[#202124] tracking-tight">Google 账号管家</span>
-            <span class="text-[11px] font-semibold uppercase px-2 py-0.5 bg-[#e8f0fe] text-[#1a73e8] rounded-full">v3.1.3</span>
+            <span class="text-[11px] font-semibold uppercase px-2 py-0.5 bg-[#e8f0fe] text-[#1a73e8] rounded-full">v3.1.4</span>
           </div>
         </div>
 
@@ -3012,7 +3020,7 @@ onUnmounted(() => {
                     <h3 class="text-xs font-bold text-[#202124] flex items-center gap-2 flex-wrap">
                       <span>软件版本检查更新</span>
                       <span class="px-2 py-0.5 rounded-full bg-[#e8f0fe] text-[#1a73e8] text-[10px] font-mono font-bold whitespace-nowrap">
-                        当前: v3.1.3
+                        当前: v3.1.4
                       </span>
                     </h3>
                     <p class="text-[11px] text-[#5f6368] mt-0.5">
@@ -3106,6 +3114,9 @@ onUnmounted(() => {
                         <span class="px-2 py-0.5 rounded-full bg-emerald-200/70 text-emerald-800 text-[10px] font-mono font-bold">
                           可升级
                         </span>
+                        <span class="px-2 py-0.5 rounded-full bg-white text-emerald-800 border border-emerald-300 text-[10px] font-semibold shadow-2xs">
+                          {{ currentInstallTypeName }}
+                        </span>
                       </h4>
                       <p class="text-[11px] text-emerald-700 mt-0.5">
                         {{ updateResult.release_name }} · 发布于 {{ updateResult.published_at.substring(0, 10) }}
@@ -3113,7 +3124,7 @@ onUnmounted(() => {
                     </div>
                   </div>
 
-                  <!-- Primary Action: In-app auto-update on desktop & mobile with browser fallback -->
+                  <!-- Primary Action: In-app auto-update directly for CURRENT version only -->
                   <div class="flex items-center gap-2 flex-wrap sm:flex-nowrap">
                     <button
                       v-if="!isDownloadingUpdate"
@@ -3126,12 +3137,12 @@ onUnmounted(() => {
 
                     <button
                       v-if="!isDownloadingUpdate"
-                      @click="openExternalUrl(isMobilePlatform ? (updateResult.apk_url || updateResult.download_url || updateResult.release_url) : (updateResult.setup_url || updateResult.portable_url || updateResult.release_url))"
+                      @click="openExternalUrl(updateResult.download_url || updateResult.release_url)"
                       class="w-full sm:w-auto px-3 py-2 bg-white hover:bg-emerald-50 text-emerald-800 border border-emerald-300 rounded-xl text-xs font-medium transition-all flex items-center justify-center gap-1.5 cursor-pointer whitespace-nowrap flex-shrink-0"
-                      title="遇到特殊权限拦截时，可直接通过浏览器下载安装包"
+                      title="直接通过浏览器下载当前版本的安装包"
                     >
                       <Download class="w-3.5 h-3.5" />
-                      <span>浏览器备用下载</span>
+                      <span>浏览器下载</span>
                     </button>
                   </div>
                 </div>
@@ -3154,98 +3165,6 @@ onUnmounted(() => {
                   <p class="text-[10px] text-emerald-700">
                     {{ isMobilePlatform ? '下载完成后将自动调起系统包安装器进行无缝覆盖升级。' : '下载完成后将自动启动最新版安装包进行无缝升级并退出当前版本。' }}
                   </p>
-                </div>
-
-                <!-- Platform Download Options -->
-                <div class="pt-2 border-t border-emerald-200/60">
-                  <div class="text-[11px] font-semibold text-emerald-900 mb-2">全平台安装包分流下载：</div>
-                  <div class="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                    <!-- Windows Setup -->
-                    <div class="p-2.5 bg-white/80 rounded-xl border border-emerald-100 flex flex-col justify-between gap-1.5">
-                      <div>
-                        <div class="font-semibold text-xs text-[#202124] flex items-center gap-1">
-                          <span>Windows 安装包</span>
-                          <span class="text-[9px] px-1.5 py-0.2 bg-[#e8f0fe] text-[#1a73e8] rounded font-mono">Setup.exe</span>
-                        </div>
-                        <div class="text-[10px] text-[#5f6368] mt-0.5">标准向导安装，支持自动升级与快捷方式</div>
-                      </div>
-                      <div class="flex items-center gap-1.5 mt-1">
-                        <button
-                          v-if="!isMobilePlatform"
-                          @click="startAutoUpdate(updateResult.setup_url || undefined)"
-                          :disabled="isDownloadingUpdate"
-                          class="flex-1 py-1 px-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] font-medium transition-colors cursor-pointer text-center"
-                        >
-                          一键升级
-                        </button>
-                        <button
-                          @click="openExternalUrl(updateResult.setup_url || updateResult.release_url)"
-                          class="py-1 px-2 bg-white hover:bg-[#f1f3f4] text-[#5f6368] border border-[#dadce0] rounded-lg text-[11px] font-medium transition-colors cursor-pointer text-center"
-                          title="浏览器直接下载"
-                        >
-                          <Download class="w-3 h-3 inline mr-0.5" />
-                          下载
-                        </button>
-                      </div>
-                    </div>
-
-                    <!-- Windows Portable -->
-                    <div class="p-2.5 bg-white/80 rounded-xl border border-emerald-100 flex flex-col justify-between gap-1.5">
-                      <div>
-                        <div class="font-semibold text-xs text-[#202124] flex items-center gap-1">
-                          <span>Windows 便携版</span>
-                          <span class="text-[9px] px-1.5 py-0.2 bg-[#f1f3f4] text-[#5f6368] rounded font-mono">Portable.exe</span>
-                        </div>
-                        <div class="text-[10px] text-[#5f6368] mt-0.5">绿色免安装单文件，解压或双击即用</div>
-                      </div>
-                      <div class="flex items-center gap-1.5 mt-1">
-                        <button
-                          v-if="!isMobilePlatform"
-                          @click="startAutoUpdate(updateResult.portable_url || undefined)"
-                          :disabled="isDownloadingUpdate"
-                          class="flex-1 py-1 px-2 bg-slate-700 hover:bg-slate-800 text-white rounded-lg text-[11px] font-medium transition-colors cursor-pointer text-center"
-                        >
-                          替换升级
-                        </button>
-                        <button
-                          @click="openExternalUrl(updateResult.portable_url || updateResult.release_url)"
-                          class="py-1 px-2 bg-white hover:bg-[#f1f3f4] text-[#5f6368] border border-[#dadce0] rounded-lg text-[11px] font-medium transition-colors cursor-pointer text-center"
-                          title="浏览器直接下载"
-                        >
-                          <Download class="w-3 h-3 inline mr-0.5" />
-                          下载
-                        </button>
-                      </div>
-                    </div>
-
-                    <!-- Android APK -->
-                    <div class="p-2.5 bg-white/80 rounded-xl border border-emerald-100 flex flex-col justify-between gap-1.5">
-                      <div>
-                        <div class="font-semibold text-xs text-[#202124] flex items-center gap-1">
-                          <span>Android 手机版</span>
-                          <span class="text-[9px] px-1.5 py-0.2 bg-emerald-100 text-emerald-800 rounded font-mono">.apk</span>
-                        </div>
-                        <div class="text-[10px] text-[#5f6368] mt-0.5">安卓端通用安装包，集成生物指纹解锁</div>
-                      </div>
-                      <div class="flex items-center gap-1.5 mt-1">
-                        <button
-                          @click="startAutoUpdate(updateResult.apk_url || undefined)"
-                          :disabled="isDownloadingUpdate"
-                          class="flex-1 py-1 px-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] font-medium transition-colors cursor-pointer text-center"
-                        >
-                          一键更新
-                        </button>
-                        <button
-                          @click="openExternalUrl(updateResult.apk_url || updateResult.release_url)"
-                          class="py-1 px-2 bg-white hover:bg-[#f1f3f4] text-[#5f6368] border border-[#dadce0] rounded-lg text-[11px] font-medium transition-colors cursor-pointer text-center"
-                          title="备用：浏览器直接下载"
-                        >
-                          <Download class="w-3 h-3 inline mr-0.5" />
-                          下载
-                        </button>
-                      </div>
-                    </div>
-                  </div>
                 </div>
 
                 <!-- Release Notes -->
@@ -3285,7 +3204,7 @@ onUnmounted(() => {
               </div>
               <div>
                 <h3 class="text-base font-bold text-[#202124]">Google 账号管家</h3>
-                <p class="text-xs text-[#1a73e8] font-mono font-medium mt-0.5">v3.1.3</p>
+                <p class="text-xs text-[#1a73e8] font-mono font-medium mt-0.5">v3.1.4</p>
               </div>
               <p class="text-xs text-[#5f6368] max-w-md leading-relaxed">
                 面向专业运维与个人多账号管理的高性能轻量跨平台保险库，集成 RFC 6238 2FA 动态码、硬件级免密解锁（Windows Hello / 移动端生物识别）、多隔离环境浏览器会话与 WebDAV 端到端纯密文同步。
