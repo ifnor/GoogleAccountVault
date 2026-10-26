@@ -7,9 +7,11 @@ import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.enableEdgeToEdge
+import androidx.annotation.Keep
 import androidx.core.content.FileProvider
 import java.io.File
 
+@Keep
 class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
@@ -24,9 +26,11 @@ class MainActivity : TauriActivity() {
     }
   }
 
+  @Keep
   companion object {
     var instance: MainActivity? = null
 
+    @Keep
     @JvmStatic
     fun installApk(context: Context, filePath: String): Boolean {
       return try {
