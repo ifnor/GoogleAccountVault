@@ -37,6 +37,7 @@ import {
   Settings,
   ChevronLeft,
   MoreVertical,
+  Zap,
   X
 } from "lucide-vue-next";
 
@@ -869,6 +870,16 @@ interface UpdateInfo {
   assets: ReleaseAsset[];
 }
 const customRepo = ref("ifnor/GoogleAccountVault");
+const updateMirror = ref<"ghproxy" | "official">(
+  (localStorage.getItem("gvault_update_mirror") as "ghproxy" | "official") || "ghproxy"
+);
+
+function setUpdateMirror(mirror: "ghproxy" | "official") {
+  updateMirror.value = mirror;
+  try {
+    localStorage.setItem("gvault_update_mirror", mirror);
+  } catch (e) {}
+}
 const isCheckingUpdate = ref(false);
 const updateResult = ref<UpdateInfo | null>(null);
 const updateError = ref("");
@@ -903,7 +914,10 @@ async function checkForUpdates() {
   updateError.value = "";
   updateResult.value = null;
   try {
-    const res = await invoke<UpdateInfo>("check_github_update", { repo: customRepo.value.trim() || undefined });
+    const res = await invoke<UpdateInfo>("check_github_update", {
+      repo: customRepo.value.trim() || undefined,
+      mirror: updateMirror.value === "ghproxy" ? "https://ghproxy.net" : "official"
+    });
     updateResult.value = res;
     if (res.has_update) {
       notify(`✨ 发现新版本 ${res.latest_version}！可在设置中查看更新`, "info", 5000);
@@ -1450,7 +1464,7 @@ onUnmounted(() => {
           </div>
           <div class="flex items-baseline gap-2">
             <span class="font-bold text-base text-[#202124] tracking-tight">Google 账号管家</span>
-            <span class="text-[11px] font-semibold uppercase px-2 py-0.5 bg-[#e8f0fe] text-[#1a73e8] rounded-full">v3.0.5</span>
+            <span class="text-[11px] font-semibold uppercase px-2 py-0.5 bg-[#e8f0fe] text-[#1a73e8] rounded-full">v3.0.6</span>
           </div>
         </div>
 
@@ -2945,7 +2959,7 @@ onUnmounted(() => {
                     <h3 class="text-xs font-bold text-[#202124] flex items-center gap-2 flex-wrap">
                       <span>软件版本检查更新</span>
                       <span class="px-2 py-0.5 rounded-full bg-[#e8f0fe] text-[#1a73e8] text-[10px] font-mono font-bold whitespace-nowrap">
-                        当前: v3.0.5
+                        当前: v3.0.6
                       </span>
                     </h3>
                     <p class="text-[11px] text-[#5f6368] mt-0.5">
@@ -2964,22 +2978,40 @@ onUnmounted(() => {
                 </button>
               </div>
 
-              <!-- GitHub Repo Input -->
-              <div class="pt-2 border-t border-[#dadce0]/60">
-                <label class="block text-[11px] font-semibold text-[#5f6368] mb-1">GitHub 仓库发布源 (Owner / Repo)</label>
-                <div class="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
-                  <input
-                    type="text"
-                    v-model="customRepo"
-                    placeholder="ifnor/GoogleAccountVault"
-                    class="flex-1 px-3 py-1.5 bg-white rounded-xl border border-[#dadce0] text-xs font-mono outline-none focus:border-[#1a73e8]"
-                  />
+              <!-- Update Mirror Source Selector -->
+              <div class="pt-2.5 border-t border-[#dadce0]/60 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                <div class="space-y-0.5">
+                  <div class="flex items-center gap-1.5">
+                    <span class="text-xs font-bold text-[#202124]">更新下载网络源</span>
+                    <span v-if="updateMirror === 'ghproxy'" class="px-1.5 py-0.2 rounded-md bg-emerald-100 text-emerald-800 text-[10px] font-semibold">推荐</span>
+                  </div>
+                  <p class="text-[11px] text-[#5f6368]">
+                    {{ updateMirror === 'ghproxy' ? '已启用 ghproxy.net 镜像加速通道，大幅提升国内下载与检测稳定性' : '使用 GitHub 官方直连通道，海外网络或自建代理环境推荐' }}
+                  </p>
+                </div>
+
+                <div class="flex items-center gap-1.5 p-1 bg-[#f1f3f4] rounded-xl self-start sm:self-auto flex-shrink-0">
                   <button
-                    @click="openExternalUrl(`https://github.com/${customRepo.trim()}/releases`)"
-                    class="px-3 py-1.5 bg-white hover:bg-[#f1f3f4] text-[#5f6368] border border-[#dadce0] rounded-xl text-xs font-medium flex items-center justify-center gap-1 transition-colors cursor-pointer whitespace-nowrap flex-shrink-0"
+                    type="button"
+                    @click="setUpdateMirror('ghproxy')"
+                    :class="[
+                      'px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer flex items-center gap-1.5',
+                      updateMirror === 'ghproxy' ? 'bg-white text-emerald-700 shadow-2xs font-semibold' : 'text-[#5f6368] hover:text-[#202124]'
+                    ]"
                   >
-                    <ExternalLink class="w-3.5 h-3.5" />
-                    <span>查看 Release 页面</span>
+                    <Zap class="w-3.5 h-3.5 text-emerald-600" />
+                    <span>ghproxy 镜像源</span>
+                  </button>
+                  <button
+                    type="button"
+                    @click="setUpdateMirror('official')"
+                    :class="[
+                      'px-3 py-1.5 rounded-lg text-xs font-medium transition-all cursor-pointer flex items-center gap-1.5',
+                      updateMirror === 'official' ? 'bg-white text-[#1a73e8] shadow-2xs font-semibold' : 'text-[#5f6368] hover:text-[#202124]'
+                    ]"
+                  >
+                    <Globe class="w-3.5 h-3.5 text-[#1a73e8]" />
+                    <span>官方直连源</span>
                   </button>
                 </div>
               </div>
@@ -3174,7 +3206,7 @@ onUnmounted(() => {
               </div>
               <div>
                 <h3 class="text-base font-bold text-[#202124]">Google 账号管家</h3>
-                <p class="text-xs text-[#1a73e8] font-mono font-medium mt-0.5">v3.0.5 (Rust 2024 · Tauri 2.0 Native)</p>
+                <p class="text-xs text-[#1a73e8] font-mono font-medium mt-0.5">v3.0.6 (Rust 2024 · Tauri 2.0 Native)</p>
               </div>
               <p class="text-xs text-[#5f6368] max-w-md leading-relaxed">
                 面向专业运维与个人多账号管理的高性能轻量跨平台保险库，集成 RFC 6238 2FA 动态码、硬件级免密解锁（Windows Hello / 移动端生物识别）、多隔离环境浏览器会话与 WebDAV 端到端纯密文同步。

@@ -611,29 +611,54 @@ fn parse_semver(v: &str) -> (u32, u32, u32) {
 }
 
 #[tauri::command]
-async fn check_github_update(repo: Option<String>) -> Result<UpdateInfo, String> {
+async fn check_github_update(
+    repo: Option<String>,
+    mirror: Option<String>,
+) -> Result<UpdateInfo, String> {
     let target_repo = repo.unwrap_or_else(|| "ifnor/GoogleAccountVault".to_string());
-    let url = format!(
+    let direct_api_url = format!(
         "https://api.github.com/repos/{}/releases/latest",
         target_repo.trim()
     );
 
+    let mirror_prefix: Option<String> = mirror.and_then(|m| {
+        let trimmed = m.trim();
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("official") {
+            None
+        } else if trimmed.eq_ignore_ascii_case("ghproxy") {
+            Some("https://ghproxy.net/".to_string())
+        } else {
+            let pfx = if trimmed.ends_with('/') {
+                trimmed.to_string()
+            } else {
+                format!("{}/", trimmed)
+            };
+            Some(pfx)
+        }
+    });
+
     let client = reqwest::Client::builder()
-        .user_agent("google-account-vault/3.0.5")
+        .user_agent("google-account-vault/3.0.6")
         .timeout(std::time::Duration::from_secs(8))
         .build()
         .map_err(|e| format!("构建 HTTP 客户端失败: {e}"))?;
 
-    let resp = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("请求 GitHub Releases 失败: {e}"))?;
+    let resp_res = if let Some(ref pfx) = mirror_prefix {
+        let proxied_api_url = format!("{}{}", pfx, direct_api_url);
+        match client.get(&proxied_api_url).send().await {
+            Ok(r) if r.status().is_success() => Ok(r),
+            _ => client.get(&direct_api_url).send().await,
+        }
+    } else {
+        client.get(&direct_api_url).send().await
+    };
+
+    let resp = resp_res.map_err(|e| format!("请求 GitHub Releases 失败: {e}"))?;
 
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(UpdateInfo {
-            current_version: "3.0.5".to_string(),
-            latest_version: "3.0.5".to_string(),
+            current_version: "3.0.6".to_string(),
+            latest_version: "3.0.6".to_string(),
             has_update: false,
             release_name: "暂无发布版本".to_string(),
             release_notes: format!("仓库 {} 尚未发布任何公开 Release", target_repo),
@@ -658,7 +683,7 @@ async fn check_github_update(repo: Option<String>) -> Result<UpdateInfo, String>
     let json: serde_json::Value =
         serde_json::from_str(&body).map_err(|e| format!("解析 Release JSON 失败: {e}"))?;
 
-    let tag = json["tag_name"].as_str().unwrap_or("3.0.5").to_string();
+    let tag = json["tag_name"].as_str().unwrap_or("3.0.6").to_string();
     let name = json["name"].as_str().unwrap_or(&tag).to_string();
     let notes = json["body"].as_str().unwrap_or("").to_string();
     let published_at = json["published_at"].as_str().unwrap_or("").to_string();
@@ -674,26 +699,32 @@ async fn check_github_update(repo: Option<String>) -> Result<UpdateInfo, String>
 
     if let Some(assets) = json["assets"].as_array() {
         for asset in assets {
-            if let (Some(asset_name), Some(browser_url)) = (
+            if let (Some(asset_name), Some(raw_browser_url)) = (
                 asset["name"].as_str(),
                 asset["browser_download_url"].as_str(),
             ) {
+                let browser_url = if let Some(ref pfx) = mirror_prefix {
+                    format!("{}{}", pfx, raw_browser_url)
+                } else {
+                    raw_browser_url.to_string()
+                };
+
                 let size = asset["size"].as_u64().unwrap_or(0);
                 let name_lower = asset_name.to_lowercase();
                 let asset_type = if name_lower.ends_with(".apk") {
-                    apk_url = Some(browser_url.to_string());
+                    apk_url = Some(browser_url.clone());
                     "apk"
                 } else if (name_lower.contains("setup") || name_lower.contains("installer"))
                     && name_lower.ends_with(".exe")
                 {
-                    setup_url = Some(browser_url.to_string());
+                    setup_url = Some(browser_url.clone());
                     "setup"
                 } else if name_lower.contains("portable") && name_lower.ends_with(".exe") {
-                    portable_url = Some(browser_url.to_string());
+                    portable_url = Some(browser_url.clone());
                     "portable"
                 } else if name_lower.ends_with(".exe") {
                     if setup_url.is_none() {
-                        setup_url = Some(browser_url.to_string());
+                        setup_url = Some(browser_url.clone());
                     }
                     "setup"
                 } else {
@@ -702,7 +733,7 @@ async fn check_github_update(repo: Option<String>) -> Result<UpdateInfo, String>
 
                 asset_list.push(ReleaseAsset {
                     name: asset_name.to_string(),
-                    download_url: browser_url.to_string(),
+                    download_url: browser_url,
                     size,
                     asset_type: asset_type.to_string(),
                 });
@@ -715,12 +746,12 @@ async fn check_github_update(repo: Option<String>) -> Result<UpdateInfo, String>
     #[cfg(not(target_os = "android"))]
     let download_url = setup_url.clone().or_else(|| portable_url.clone());
 
-    let current = (3, 0, 5);
+    let current = (3, 0, 6);
     let latest = parse_semver(&tag);
     let has_update = latest > current;
 
     Ok(UpdateInfo {
-        current_version: "3.0.5".to_string(),
+        current_version: "3.0.6".to_string(),
         latest_version: tag,
         has_update,
         release_name: name,
@@ -750,7 +781,7 @@ async fn start_auto_update(app: tauri::AppHandle, url: String) -> Result<(), Str
     use tauri::Emitter;
 
     let client = reqwest::Client::builder()
-        .user_agent("google-account-vault/3.0.5")
+        .user_agent("google-account-vault/3.0.6")
         .build()
         .map_err(|e| format!("初始化下载客户端失败: {e}"))?;
 
