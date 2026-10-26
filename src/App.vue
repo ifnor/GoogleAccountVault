@@ -306,6 +306,7 @@ async function handleAuth() {
       selectedId.value = records.value[0].id;
     }
     startTotpTicker();
+    loadWebDavConfig();
   } catch (err: any) {
     unlockError.value = typeof err === "string" ? err : (err?.message || "解锁失败");
   } finally {
@@ -340,6 +341,7 @@ async function handleHelloUnlock() {
         selectedId.value = records.value[0].id;
       }
       startTotpTicker();
+      loadWebDavConfig();
     } else {
       records.value = await invoke<AccountRecord[]>("unlock_vault_with_hello");
       isUnlocked.value = true;
@@ -347,6 +349,7 @@ async function handleHelloUnlock() {
         selectedId.value = records.value[0].id;
       }
       startTotpTicker();
+      loadWebDavConfig();
     }
   } catch (err: any) {
     const defaultMsg = isMobilePlatform.value ? "手机安全验证未通过" : "Windows Hello 验证未通过";
@@ -844,6 +847,56 @@ const webdavForm = ref({ url: "", username: "", password: "" });
 const webdavStatus = ref("");
 const isWebDavSyncing = ref(false);
 
+async function loadWebDavConfig() {
+  try {
+    const saved = await invoke<any>("load_webdav_config");
+    if (saved && (saved.url || saved.username || saved.password)) {
+      webdavForm.value = {
+        url: saved.url || "",
+        username: saved.username || "",
+        password: saved.password || ""
+      };
+      try {
+        localStorage.setItem("gvault_webdav_config", JSON.stringify(webdavForm.value));
+      } catch (e) {}
+      return;
+    }
+  } catch (e) {
+    console.warn("load_webdav_config error:", e);
+  }
+
+  // Fallback to localStorage cache
+  try {
+    const localStr = localStorage.getItem("gvault_webdav_config");
+    if (localStr) {
+      const parsed = JSON.parse(localStr);
+      if (parsed && (parsed.url || parsed.username || parsed.password)) {
+        webdavForm.value = {
+          url: parsed.url || "",
+          username: parsed.username || "",
+          password: parsed.password || ""
+        };
+      }
+    }
+  } catch (e) {}
+}
+
+async function handleSaveWebDavConfig(notifyUser = true) {
+  try {
+    await invoke("save_webdav_config", { config: webdavForm.value });
+    try {
+      localStorage.setItem("gvault_webdav_config", JSON.stringify(webdavForm.value));
+    } catch (e) {}
+    if (notifyUser) {
+      webdavStatus.value = "✅ 配置已成功保存到本地安全存储";
+      notify("WebDAV 配置已保存", "success", 2500);
+    }
+  } catch (err: any) {
+    webdavStatus.value = "❌ 保存失败: " + err;
+    if (notifyUser) notify("保存 WebDAV 配置失败: " + err, "error");
+  }
+}
+
 // ==================== SETTINGS & GITHUB UPDATE ====================
 const showSettingsModal = ref(false);
 const settingsTab = ref<"security" | "webdav" | "backups" | "updates" | "about">("security");
@@ -892,18 +945,7 @@ async function openSettingsModal(tab: "security" | "webdav" | "backups" | "updat
   settingsTab.value = tab;
   showSettingsModal.value = true;
   webdavStatus.value = "";
-  if (tab === "webdav") {
-    try {
-      const saved = await invoke<any>("load_webdav_config");
-      if (saved) {
-        webdavForm.value = {
-          url: saved.url || "",
-          username: saved.username || "",
-          password: saved.password || ""
-        };
-      }
-    } catch (e) {}
-  }
+  await loadWebDavConfig();
   if (tab === "backups") {
     await loadBackupsList();
   }
@@ -970,6 +1012,7 @@ async function startAutoUpdate(targetUrl?: string) {
 
 async function handleTestWebDav() {
   if (!webdavForm.value.url.trim()) return;
+  await handleSaveWebDavConfig(false);
   isWebDavSyncing.value = true;
   webdavStatus.value = "正在连接 WebDAV 服务器...";
   try {
@@ -982,20 +1025,11 @@ async function handleTestWebDav() {
   }
 }
 
-async function handleSaveWebDavConfig() {
-  try {
-    await invoke("save_webdav_config", { config: webdavForm.value });
-    webdavStatus.value = "✅ 配置已保存到本地安全存储";
-  } catch (err: any) {
-    webdavStatus.value = "❌ 保存失败: " + err;
-  }
-}
-
 async function handleUploadWebDav() {
   isWebDavSyncing.value = true;
   webdavStatus.value = "正在上传加密保险库至云端...";
   try {
-    await invoke("save_webdav_config", { config: webdavForm.value });
+    await handleSaveWebDavConfig(false);
     await invoke("upload_webdav_vault", { config: webdavForm.value });
     webdavStatus.value = "✅ 本地保险库已成功同步上传至云端（端到端强加密密文）！";
   } catch (err: any) {
@@ -1017,7 +1051,7 @@ async function handleDownloadWebDav() {
   isWebDavSyncing.value = true;
   webdavStatus.value = "正在下载并解密验证云端保险库...";
   try {
-    await invoke("save_webdav_config", { config: webdavForm.value });
+    await handleSaveWebDavConfig(false);
     const remote = await invoke<AccountRecord[]>("download_webdav_vault", { config: webdavForm.value });
     records.value = remote;
     if (remote.length > 0) selectedId.value = remote[0].id;
@@ -1343,6 +1377,7 @@ onMounted(async () => {
   }
   await refreshSecurityStatus();
   await setupBackNavigation();
+  await loadWebDavConfig();
   if (typeof window !== "undefined") {
     window.addEventListener("resize", updateWindowWidth);
     updateWindowWidth();
@@ -1464,7 +1499,7 @@ onUnmounted(() => {
           </div>
           <div class="flex items-baseline gap-2">
             <span class="font-bold text-base text-[#202124] tracking-tight">Google 账号管家</span>
-            <span class="text-[11px] font-semibold uppercase px-2 py-0.5 bg-[#e8f0fe] text-[#1a73e8] rounded-full">v3.0.6</span>
+            <span class="text-[11px] font-semibold uppercase px-2 py-0.5 bg-[#e8f0fe] text-[#1a73e8] rounded-full">v3.0.7</span>
           </div>
         </div>
 
@@ -2586,7 +2621,7 @@ onUnmounted(() => {
           </button>
 
           <button
-            @click="settingsTab = 'webdav'"
+            @click="settingsTab = 'webdav'; loadWebDavConfig()"
             :class="[
               'px-3.5 py-1.5 rounded-full flex items-center gap-1.5 transition-all cursor-pointer whitespace-nowrap flex-shrink-0',
               settingsTab === 'webdav'
@@ -2740,6 +2775,7 @@ onUnmounted(() => {
                   <input
                     type="text"
                     v-model="webdavForm.url"
+                    @change="handleSaveWebDavConfig(false)"
                     placeholder="https://dav.jianguoyun.com/dav/GoogleVault/"
                     class="w-full px-3 py-2 bg-white rounded-xl border border-[#dadce0] focus:border-[#1a73e8] text-xs outline-none font-mono"
                   />
@@ -2751,6 +2787,7 @@ onUnmounted(() => {
                     <input
                       type="text"
                       v-model="webdavForm.username"
+                      @change="handleSaveWebDavConfig(false)"
                       placeholder="your_email@example.com"
                       class="w-full px-3 py-2 bg-white rounded-xl border border-[#dadce0] focus:border-[#1a73e8] text-xs outline-none"
                     />
@@ -2760,6 +2797,7 @@ onUnmounted(() => {
                     <input
                       type="password"
                       v-model="webdavForm.password"
+                      @change="handleSaveWebDavConfig(false)"
                       placeholder="专用应用授权密码..."
                       class="w-full px-3 py-2 bg-white rounded-xl border border-[#dadce0] focus:border-[#1a73e8] text-xs outline-none font-mono"
                     />
@@ -2783,7 +2821,7 @@ onUnmounted(() => {
                   </button>
                   <button
                     type="button"
-                    @click="handleSaveWebDavConfig"
+                    @click="handleSaveWebDavConfig(true)"
                     class="px-4 py-2 bg-white hover:bg-[#f1f3f4] text-[#3c4043] border border-[#dadce0] rounded-xl text-xs font-medium transition-colors cursor-pointer"
                   >
                     保存配置
@@ -2959,7 +2997,7 @@ onUnmounted(() => {
                     <h3 class="text-xs font-bold text-[#202124] flex items-center gap-2 flex-wrap">
                       <span>软件版本检查更新</span>
                       <span class="px-2 py-0.5 rounded-full bg-[#e8f0fe] text-[#1a73e8] text-[10px] font-mono font-bold whitespace-nowrap">
-                        当前: v3.0.6
+                        当前: v3.0.7
                       </span>
                     </h3>
                     <p class="text-[11px] text-[#5f6368] mt-0.5">
@@ -3206,7 +3244,7 @@ onUnmounted(() => {
               </div>
               <div>
                 <h3 class="text-base font-bold text-[#202124]">Google 账号管家</h3>
-                <p class="text-xs text-[#1a73e8] font-mono font-medium mt-0.5">v3.0.6 (Rust 2024 · Tauri 2.0 Native)</p>
+                <p class="text-xs text-[#1a73e8] font-mono font-medium mt-0.5">v3.0.7 (Rust 2024 · Tauri 2.0 Native)</p>
               </div>
               <p class="text-xs text-[#5f6368] max-w-md leading-relaxed">
                 面向专业运维与个人多账号管理的高性能轻量跨平台保险库，集成 RFC 6238 2FA 动态码、硬件级免密解锁（Windows Hello / 移动端生物识别）、多隔离环境浏览器会话与 WebDAV 端到端纯密文同步。
