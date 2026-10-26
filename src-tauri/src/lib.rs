@@ -625,7 +625,12 @@ async fn check_github_update(
         let trimmed = m.trim();
         if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("official") {
             None
-        } else if trimmed.eq_ignore_ascii_case("ghproxy") {
+        } else if trimmed.eq_ignore_ascii_case("gh-proxy")
+            || trimmed.eq_ignore_ascii_case("gh_proxy")
+            || trimmed.contains("gh-proxy.com")
+        {
+            Some("https://gh-proxy.com/".to_string())
+        } else if trimmed.eq_ignore_ascii_case("ghproxy") || trimmed.contains("ghproxy.net") {
             Some("https://ghproxy.net/".to_string())
         } else {
             let pfx = if trimmed.ends_with('/') {
@@ -638,7 +643,7 @@ async fn check_github_update(
     });
 
     let client = reqwest::Client::builder()
-        .user_agent("google-account-vault/3.1.1")
+        .user_agent("google-account-vault/3.1.2")
         .timeout(std::time::Duration::from_secs(8))
         .build()
         .map_err(|e| format!("构建 HTTP 客户端失败: {e}"))?;
@@ -657,8 +662,8 @@ async fn check_github_update(
 
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(UpdateInfo {
-            current_version: "3.1.1".to_string(),
-            latest_version: "3.1.1".to_string(),
+            current_version: "3.1.2".to_string(),
+            latest_version: "3.1.2".to_string(),
             has_update: false,
             release_name: "暂无发布版本".to_string(),
             release_notes: format!("仓库 {} 尚未发布任何公开 Release", target_repo),
@@ -683,7 +688,7 @@ async fn check_github_update(
     let json: serde_json::Value =
         serde_json::from_str(&body).map_err(|e| format!("解析 Release JSON 失败: {e}"))?;
 
-    let tag = json["tag_name"].as_str().unwrap_or("3.1.1").to_string();
+    let tag = json["tag_name"].as_str().unwrap_or("3.1.2").to_string();
     let name = json["name"].as_str().unwrap_or(&tag).to_string();
     let notes = json["body"].as_str().unwrap_or("").to_string();
     let published_at = json["published_at"].as_str().unwrap_or("").to_string();
@@ -746,12 +751,12 @@ async fn check_github_update(
     #[cfg(not(target_os = "android"))]
     let download_url = setup_url.clone().or_else(|| portable_url.clone());
 
-    let current = (3, 1, 1);
+    let current = (3, 1, 2);
     let latest = parse_semver(&tag);
     let has_update = latest > current;
 
     Ok(UpdateInfo {
-        current_version: "3.1.1".to_string(),
+        current_version: "3.1.2".to_string(),
         latest_version: tag,
         has_update,
         release_name: name,
@@ -781,7 +786,7 @@ async fn start_auto_update(app: tauri::AppHandle, url: String) -> Result<(), Str
     use tauri::Emitter;
 
     let client = reqwest::Client::builder()
-        .user_agent("google-account-vault/3.1.1")
+        .user_agent("google-account-vault/3.1.2")
         .build()
         .map_err(|e| format!("初始化下载客户端失败: {e}"))?;
 
