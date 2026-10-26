@@ -1378,11 +1378,7 @@ onUnmounted(() => {
         <div class="w-16 h-16 rounded-2xl bg-white shadow-sm border border-[#dadce0]/70 flex items-center justify-center mb-5 p-2.5 overflow-hidden">
           <img src="/app.ico" alt="Google 账号管家 Logo" class="w-full h-full object-contain" />
         </div>
-        <h1 class="text-2xl font-bold tracking-tight text-[#202124] mb-1">Google 账号管家</h1>
-        <p class="text-sm text-[#5f6368] mb-6 flex items-center gap-1.5">
-          <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
-          Rust 2.0 原生超强加密保险库
-        </p>
+        <h1 class="text-2xl font-bold tracking-tight text-[#202124] mb-6">Google 账号管家</h1>
 
         <form @submit.prevent="handleAuth" class="w-full flex flex-col gap-4">
           <div>
@@ -1439,9 +1435,7 @@ onUnmounted(() => {
           <span>{{ isMobilePlatform ? "手机支持生物识别与锁屏密码，首次主密码解锁后可在设置中一键绑定快速登录。" : "本机支持 Windows Hello，首次主密码解锁后可在顶部一键绑定指纹/PIN快速登录。" }}</span>
         </div>
 
-        <p class="text-xs text-[#80868b] text-center mt-6">
-          所有数据经由 AES-256-GCM 本地加密保存，绝无明文落盘。
-        </p>
+
       </div>
     </div>
 
@@ -1456,7 +1450,7 @@ onUnmounted(() => {
           </div>
           <div class="flex items-baseline gap-2">
             <span class="font-bold text-base text-[#202124] tracking-tight">Google 账号管家</span>
-            <span class="text-[11px] font-semibold uppercase px-2 py-0.5 bg-[#e8f0fe] text-[#1a73e8] rounded-full">v3.0.4 Rust</span>
+            <span class="text-[11px] font-semibold uppercase px-2 py-0.5 bg-[#e8f0fe] text-[#1a73e8] rounded-full">v3.0.5</span>
           </div>
         </div>
 
@@ -2951,7 +2945,7 @@ onUnmounted(() => {
                     <h3 class="text-xs font-bold text-[#202124] flex items-center gap-2 flex-wrap">
                       <span>软件版本检查更新</span>
                       <span class="px-2 py-0.5 rounded-full bg-[#e8f0fe] text-[#1a73e8] text-[10px] font-mono font-bold whitespace-nowrap">
-                        当前: v3.0.4
+                        当前: v3.0.5
                       </span>
                     </h3>
                     <p class="text-[11px] text-[#5f6368] mt-0.5">
@@ -3180,7 +3174,7 @@ onUnmounted(() => {
               </div>
               <div>
                 <h3 class="text-base font-bold text-[#202124]">Google 账号管家</h3>
-                <p class="text-xs text-[#1a73e8] font-mono font-medium mt-0.5">v3.0.4 (Rust 2024 · Tauri 2.0 Native)</p>
+                <p class="text-xs text-[#1a73e8] font-mono font-medium mt-0.5">v3.0.5 (Rust 2024 · Tauri 2.0 Native)</p>
               </div>
               <p class="text-xs text-[#5f6368] max-w-md leading-relaxed">
                 面向专业运维与个人多账号管理的高性能轻量跨平台保险库，集成 RFC 6238 2FA 动态码、硬件级免密解锁（Windows Hello / 移动端生物识别）、多隔离环境浏览器会话与 WebDAV 端到端纯密文同步。
