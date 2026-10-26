@@ -31,9 +31,9 @@ android {
             val keystoreFile = file("release.keystore")
             if (keystoreFile.exists()) {
                 storeFile = keystoreFile
-                storePassword = (project.findProperty("KEYSTORE_PASSWORD") as String?) ?: "android"
-                keyAlias = (project.findProperty("KEY_ALIAS") as String?) ?: "androiddebugkey"
-                keyPassword = (project.findProperty("KEY_PASSWORD") as String?) ?: "android"
+                storePassword = (project.findProperty("KEYSTORE_PASSWORD") as String?) ?: "ifnor2026"
+                keyAlias = (project.findProperty("KEY_ALIAS") as String?) ?: "ifnor"
+                keyPassword = (project.findProperty("KEY_PASSWORD") as String?) ?: "ifnor2026"
             } else {
                 initWith(getByName("debug"))
             }
