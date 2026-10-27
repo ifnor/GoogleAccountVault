@@ -966,6 +966,123 @@ const currentInstallTypeName = computed(() => {
   }
   return "Windows 安装版";
 });
+
+interface ParsedChangelogItem {
+  type: string;
+  typeLabel: string;
+  typeColor: string;
+  scope?: string;
+  scopeLabel?: string;
+  text: string;
+}
+
+interface ParsedReleaseNotes {
+  title: string;
+  items: ParsedChangelogItem[];
+  rawText?: string;
+}
+
+const parsedReleaseNotes = computed<ParsedReleaseNotes | null>(() => {
+  const raw = updateResult.value?.release_notes?.trim();
+  if (!raw) return null;
+
+  const lines = raw.split(/\r?\n/);
+  let title = "🚀 本次更新内容";
+  const items: ParsedChangelogItem[] = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    // Remove markdown heading tokens like ### or ##
+    const headerMatch = trimmed.match(/^#{1,6}\s*(.*)$/);
+    if (headerMatch) {
+      const headerText = headerMatch[1].trim();
+      if (headerText) {
+        title = headerText;
+      }
+      continue;
+    }
+
+    // Strip leading bullet markers like "* ", "- ", "• ", "+ "
+    const content = trimmed.replace(/^[\*\-\•\+]\s+/, "").trim();
+    if (!content) continue;
+
+    // Conventional Commits format: feat(scope): message or fix: message
+    const commitMatch = content.match(/^([a-zA-Z]+)(?:\(([^)]+)\))?\s*[:：]\s*(.*)$/);
+
+    if (commitMatch) {
+      const rawType = commitMatch[1].toLowerCase();
+      const rawScope = commitMatch[2]?.trim() || "";
+      const message = commitMatch[3].trim();
+
+      let typeLabel = "优化";
+      let typeColor = "bg-blue-50 text-blue-700 border-blue-200";
+
+      if (rawType === "feat") {
+        typeLabel = "新增";
+        typeColor = "bg-emerald-50 text-emerald-700 border-emerald-200";
+      } else if (rawType === "fix") {
+        typeLabel = "修复";
+        typeColor = "bg-amber-50 text-amber-700 border-amber-200";
+      } else if (rawType === "perf") {
+        typeLabel = "性能";
+        typeColor = "bg-teal-50 text-teal-700 border-teal-200";
+      } else if (rawType === "refactor") {
+        typeLabel = "重构";
+        typeColor = "bg-purple-50 text-purple-700 border-purple-200";
+      } else if (rawType === "chore") {
+        typeLabel = "工程";
+        typeColor = "bg-slate-50 text-slate-700 border-slate-200";
+      } else if (rawType === "docs") {
+        typeLabel = "文档";
+        typeColor = "bg-sky-50 text-sky-700 border-sky-200";
+      } else if (rawType === "style") {
+        typeLabel = "界面";
+        typeColor = "bg-pink-50 text-pink-700 border-pink-200";
+      }
+
+      let scopeLabel = rawScope;
+      const lowerScope = rawScope.toLowerCase();
+      if (lowerScope === "android") scopeLabel = "Android";
+      else if (lowerScope === "desktop" || lowerScope === "windows") scopeLabel = "桌面端";
+      else if (lowerScope === "ci" || lowerScope === "actions") scopeLabel = "CI构建";
+      else if (lowerScope === "update" || lowerScope === "updater") scopeLabel = "自动更新";
+      else if (lowerScope === "ui") scopeLabel = "UI界面";
+      else if (lowerScope === "vault" || lowerScope === "security") scopeLabel = "安全库";
+      else if (lowerScope === "webdav" || lowerScope === "sync") scopeLabel = "云端同步";
+
+      items.push({
+        type: rawType,
+        typeLabel,
+        typeColor,
+        scope: rawScope,
+        scopeLabel: scopeLabel || undefined,
+        text: message || content
+      });
+    } else {
+      items.push({
+        type: "other",
+        typeLabel: "详情",
+        typeColor: "bg-slate-50 text-slate-600 border-slate-200",
+        text: content
+      });
+    }
+  }
+
+  if (items.length === 0) {
+    return {
+      title,
+      items: [],
+      rawText: raw
+    };
+  }
+
+  return {
+    title,
+    items
+  };
+});
 const isDownloadingUpdate = ref(false);
 const downloadProgress = ref(0);
 const downloadStatusText = ref("");
@@ -3265,10 +3382,52 @@ onUnmounted(() => {
                   </p>
                 </div>
 
-                <!-- Release Notes -->
-                <div v-if="updateResult.release_notes" class="p-3 bg-white/90 rounded-xl border border-emerald-100 text-xs font-sans text-[#202124] max-h-48 overflow-y-auto whitespace-pre-wrap leading-relaxed">
-                  <div class="font-bold text-[11px] text-[#5f6368] mb-1">更新日志：</div>
-                  {{ updateResult.release_notes }}
+                <!-- Release Notes (Beautifully formatted) -->
+                <div v-if="parsedReleaseNotes" class="p-3 bg-white/95 rounded-xl border border-emerald-100 text-xs shadow-2xs space-y-2">
+                  <div class="flex items-center justify-between pb-1.5 border-b border-[#dadce0]/50 text-[11px] font-bold text-[#202124]">
+                    <div class="flex items-center gap-1.5 text-emerald-900">
+                      <span>{{ parsedReleaseNotes.title }}</span>
+                    </div>
+                    <span v-if="parsedReleaseNotes.items.length > 0" class="text-[10px] text-[#5f6368] font-normal font-mono">
+                      共 {{ parsedReleaseNotes.items.length }} 项改动
+                    </span>
+                  </div>
+
+                  <div v-if="parsedReleaseNotes.items.length > 0" class="space-y-1.5 max-h-52 overflow-y-auto pr-1">
+                    <div
+                      v-for="(item, idx) in parsedReleaseNotes.items"
+                      :key="idx"
+                      class="flex items-start gap-1.5 leading-relaxed text-[#202124] text-[11.5px]"
+                    >
+                      <span class="w-1.5 h-1.5 rounded-full bg-emerald-500 mt-1.5 flex-shrink-0"></span>
+                      <div class="flex-1 min-w-0 flex items-baseline gap-1.5 flex-wrap sm:flex-nowrap">
+                        <div class="flex items-center gap-1 flex-shrink-0">
+                          <span
+                            :class="[
+                              'px-1.5 py-0.2 rounded border text-[10px] font-medium leading-tight whitespace-nowrap',
+                              item.typeColor
+                            ]"
+                          >
+                            {{ item.typeLabel }}
+                          </span>
+                          <span
+                            v-if="item.scopeLabel"
+                            class="px-1.5 py-0.2 rounded bg-[#f1f3f4] text-[#5f6368] text-[10px] font-medium leading-tight whitespace-nowrap"
+                          >
+                            {{ item.scopeLabel }}
+                          </span>
+                        </div>
+                        <span class="text-[#3c4043] leading-normal break-words">{{ item.text }}</span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div
+                    v-else-if="parsedReleaseNotes.rawText"
+                    class="text-[#3c4043] whitespace-pre-wrap leading-relaxed max-h-48 overflow-y-auto text-[11px]"
+                  >
+                    {{ parsedReleaseNotes.rawText }}
+                  </div>
                 </div>
               </div>
 
