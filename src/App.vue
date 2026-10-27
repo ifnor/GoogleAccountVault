@@ -18,7 +18,6 @@ import {
   Eye,
   EyeOff,
   Folder,
-  User,
   Sparkles,
   Clock,
   Info,
@@ -38,6 +37,7 @@ import {
   ChevronLeft,
   MoreVertical,
   Zap,
+  Shield,
   X
 } from "lucide-vue-next";
 
@@ -81,9 +81,20 @@ const mobileView = ref<"list" | "detail">("list");
 const showMobileSearch = ref(false);
 const showMobileMoreMenu = ref(false);
 
+const autoSelectFirst = ref(localStorage.getItem("vault_auto_select_first") === "true");
+function toggleAutoSelectFirst() {
+  autoSelectFirst.value = !autoSelectFirst.value;
+  localStorage.setItem("vault_auto_select_first", autoSelectFirst.value ? "true" : "false");
+}
+
 function selectAccount(id: string) {
-  selectedId.value = id;
-  mobileView.value = "detail";
+  if (selectedId.value === id) {
+    selectedId.value = null;
+    mobileView.value = "list";
+  } else {
+    selectedId.value = id;
+    mobileView.value = "detail";
+  }
 }
 
 // Detail Panel Width & Resizing (Desktop)
@@ -302,8 +313,10 @@ async function handleAuth() {
       vaultExists.value = true;
     }
     isUnlocked.value = true;
-    if (records.value.length > 0) {
+    if (autoSelectFirst.value && records.value.length > 0) {
       selectedId.value = records.value[0].id;
+    } else {
+      selectedId.value = null;
     }
     startTotpTicker();
     loadWebDavConfig();
@@ -337,16 +350,20 @@ async function handleHelloUnlock() {
       records.value = await invoke<AccountRecord[]>("unlock_vault", { password: pwd });
       masterPassword.value = pwd;
       isUnlocked.value = true;
-      if (records.value.length > 0) {
+      if (autoSelectFirst.value && records.value.length > 0) {
         selectedId.value = records.value[0].id;
+      } else {
+        selectedId.value = null;
       }
       startTotpTicker();
       loadWebDavConfig();
     } else {
       records.value = await invoke<AccountRecord[]>("unlock_vault_with_hello");
       isUnlocked.value = true;
-      if (records.value.length > 0) {
+      if (autoSelectFirst.value && records.value.length > 0) {
         selectedId.value = records.value[0].id;
+      } else {
+        selectedId.value = null;
       }
       startTotpTicker();
       loadWebDavConfig();
@@ -833,7 +850,7 @@ async function confirmBatchImport() {
     records.value = await invoke<AccountRecord[]>("get_records");
     showBatchImportModal.value = false;
     notify(`🎉 成功批量导入/合并了 ${count} 个账号记录！`, "success", 4000);
-    if (!selectedId.value && records.value.length > 0) {
+    if (autoSelectFirst.value && !selectedId.value && records.value.length > 0) {
       selectedId.value = records.value[0].id;
     }
     updateAllTotp();
@@ -1077,7 +1094,7 @@ async function handleDownloadWebDav() {
     await handleSaveWebDavConfig(false);
     const remote = await invoke<AccountRecord[]>("download_webdav_vault", { config: webdavForm.value });
     records.value = remote;
-    if (remote.length > 0) selectedId.value = remote[0].id;
+    if (autoSelectFirst.value && remote.length > 0) selectedId.value = remote[0].id; else selectedId.value = null;
     updateAllTotp();
     webdavStatus.value = `✅ 云端恢复成功！共同步载入 ${remote.length} 个账号。`;
     notify(`云端恢复成功！已同步载入 ${remote.length} 个账号`, "success");
@@ -1117,7 +1134,7 @@ async function handleRestoreBackup(filename: string) {
   try {
     const restored = await invoke<AccountRecord[]>("restore_vault_backup", { filename });
     records.value = restored;
-    if (restored.length > 0) selectedId.value = restored[0].id;
+    if (autoSelectFirst.value && restored.length > 0) selectedId.value = restored[0].id; else selectedId.value = null;
     updateAllTotp();
     await loadBackupsList();
     notify(`🎉 成功回滚到历史版本！已载入 ${restored.length} 个账号记录。`, "success", 4000);
@@ -1351,6 +1368,13 @@ function handleBackAction(): boolean {
   // 10. Mobile detail view -> return to account list
   if (mobileView.value === "detail") {
     mobileView.value = "list";
+    selectedId.value = null;
+    return true;
+  }
+
+  // 11. Escape key / Back navigation deselects currently selected account
+  if (selectedId.value !== null) {
+    selectedId.value = null;
     return true;
   }
 
@@ -1522,7 +1546,7 @@ onUnmounted(() => {
           </div>
           <div class="flex items-baseline gap-2">
             <span class="font-bold text-base text-[#202124] tracking-tight">Google 账号管家</span>
-            <span class="text-[11px] font-semibold uppercase px-2 py-0.5 bg-[#e8f0fe] text-[#1a73e8] rounded-full">v3.1.5</span>
+            <span class="text-[11px] font-semibold uppercase px-2 py-0.5 bg-[#e8f0fe] text-[#1a73e8] rounded-full">v3.1.6</span>
           </div>
         </div>
 
@@ -1770,7 +1794,7 @@ onUnmounted(() => {
             <span class="text-[11px] text-[#80868b] hidden md:inline">双击可快速编辑详情</span>
           </div>
 
-          <div class="flex-1 overflow-y-auto divide-y divide-[#f1f3f4]">
+          <div class="flex-1 overflow-y-auto divide-y divide-[#f1f3f4]" @click.self="selectedId = null">
             <div
               v-for="r in filteredRecords"
               :key="r.id"
@@ -1860,7 +1884,6 @@ onUnmounted(() => {
 
         <!-- Resizer Divider (Desktop only) -->
         <div
-          v-if="selectedRecord"
           class="hidden md:flex items-center justify-center w-1 hover:w-1.5 bg-[#dadce0]/40 hover:bg-[#1a73e8]/40 active:bg-[#1a73e8] cursor-col-resize transition-all select-none z-10 -ml-0.5"
           :class="{ 'bg-[#1a73e8] w-1.5': isResizingDetail }"
           @mousedown="startResizeDetail"
@@ -1917,7 +1940,16 @@ onUnmounted(() => {
                 <div class="min-w-0 flex-1">
                   <div class="flex items-center justify-between gap-1.5">
                     <div class="text-[11px] text-[#5f6368]">Google 账号</div>
-                    <span :class="getStatusBadgeClass(selectedRecord.status)">{{ selectedRecord.status || '待录入' }}</span>
+                    <div class="flex items-center gap-1.5">
+                      <span :class="getStatusBadgeClass(selectedRecord.status)">{{ selectedRecord.status || '待录入' }}</span>
+                      <button
+                        @click="selectedId = null"
+                        class="hidden md:flex p-0.5 hover:bg-[#f1f3f4] text-[#80868b] hover:text-[#202124] rounded-md transition-colors cursor-pointer"
+                        title="取消选中 / 返回防窥模式 (Esc)"
+                      >
+                        <X class="w-3.5 h-3.5" />
+                      </button>
+                    </div>
                   </div>
                   <div class="text-xs font-bold text-[#202124] truncate" :title="selectedRecord.email">{{ selectedRecord.email }}</div>
                 </div>
@@ -2136,9 +2168,21 @@ onUnmounted(() => {
             </div>
           </template>
 
-          <div v-else class="flex-1 flex flex-col items-center justify-center text-center p-6 text-[#80868b]">
-            <User class="w-10 h-10 mb-2 text-[#dadce0]" />
-            <p class="text-xs">请在列表中选择一个账号查看详情</p>
+          <div v-else class="flex-1 flex flex-col items-center justify-center text-center p-6 text-[#80868b] select-none">
+            <div class="w-14 h-14 rounded-2xl bg-[#e8f0fe] flex items-center justify-center mb-3 text-[#1a73e8] shadow-2xs">
+              <Shield class="w-7 h-7" />
+            </div>
+            <h4 class="text-sm font-bold text-[#202124] mb-1">隐私防窥模式已就绪</h4>
+            <p class="text-xs text-[#5f6368] max-w-xs leading-relaxed mb-4">
+              当前未选中任何账号，密码与 2FA 动态码处于防窥保护中。请在左侧列表中点击选择查看。
+            </p>
+            <div class="inline-flex items-center gap-1.5 text-[11px] text-[#5f6368] bg-white px-3 py-1.5 rounded-xl border border-[#dadce0]/80 shadow-2xs">
+              <span>快捷提示:</span>
+              <kbd class="px-1.5 py-0.5 bg-[#f1f3f4] text-[#3c4043] rounded border border-[#dadce0] text-[10px] font-mono font-medium">再次点击</kbd>
+              <span>或</span>
+              <kbd class="px-1.5 py-0.5 bg-[#f1f3f4] text-[#3c4043] rounded border border-[#dadce0] text-[10px] font-mono font-medium">Esc</kbd>
+              <span>可随时取消选中</span>
+            </div>
           </div>
         </aside>
 
@@ -2769,6 +2813,60 @@ onUnmounted(() => {
               </div>
             </div>
 
+            <!-- Privacy & Selection Preferences -->
+            <div class="p-3.5 sm:p-4 bg-[#f8fafd] rounded-2xl border border-[#dadce0] space-y-3">
+              <div class="flex items-center justify-between gap-3">
+                <div class="flex items-center gap-3 min-w-0">
+                  <div class="w-10 h-10 rounded-xl bg-white border border-[#dadce0]/70 flex items-center justify-center text-[#1a73e8] shadow-xs flex-shrink-0">
+                    <Shield class="w-5 h-5" />
+                  </div>
+                  <div class="min-w-0">
+                    <h3 class="text-xs font-bold text-[#202124] flex items-center gap-2">
+                      <span>解锁后自动选中首个账号</span>
+                      <span
+                        v-if="!autoSelectFirst"
+                        class="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-semibold whitespace-nowrap"
+                      >
+                        已启用防窥保护
+                      </span>
+                    </h3>
+                    <p class="text-[11px] text-[#5f6368] mt-0.5">
+                      {{ autoSelectFirst ? '已开启：解锁后将自动高亮首个账号并展示其详情与 2FA 动态码。' : '推荐关闭（已生效）：解锁后保持留白防窥状态，点击列表才展开详情。' }}
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  @click="toggleAutoSelectFirst"
+                  :class="[
+                    'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none',
+                    autoSelectFirst ? 'bg-[#1a73e8]' : 'bg-[#dadce0]'
+                  ]"
+                >
+                  <span
+                    :class="[
+                      'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                      autoSelectFirst ? 'translate-x-5' : 'translate-x-0'
+                    ]"
+                  />
+                </button>
+              </div>
+
+              <!-- Shortcut Tips Banner -->
+              <div class="p-3 bg-white/80 rounded-xl border border-[#dadce0]/60 text-[11px] text-[#5f6368] space-y-1">
+                <div class="font-semibold text-[#202124] flex items-center gap-1.5">
+                  <Sparkles class="w-3.5 h-3.5 text-[#1a73e8] flex-shrink-0" />
+                  <span>防窥与反选操作技巧</span>
+                </div>
+                <p class="leading-relaxed text-[11px]">
+                  • <b>再次点击已选账号</b>：直接取消选中并关闭详情。<br />
+                  • <b>按 Esc 键或点击空白区域</b>：快速返回安全留白防窥状态。<br />
+                  • <b>详情右上角关闭按钮</b>：一键折叠当前账号。
+                </p>
+              </div>
+            </div>
+
             <!-- Master Password Encryption Architecture -->
             <div class="p-3.5 sm:p-4 bg-[#f8fafd] rounded-2xl border border-[#dadce0] space-y-2">
               <h3 class="text-xs font-bold text-[#202124] flex items-center gap-2">
@@ -3020,7 +3118,7 @@ onUnmounted(() => {
                     <h3 class="text-xs font-bold text-[#202124] flex items-center gap-2 flex-wrap">
                       <span>软件版本检查更新</span>
                       <span class="px-2 py-0.5 rounded-full bg-[#e8f0fe] text-[#1a73e8] text-[10px] font-mono font-bold whitespace-nowrap">
-                        当前: v3.1.5
+                        当前: v3.1.6
                       </span>
                     </h3>
                     <p class="text-[11px] text-[#5f6368] mt-0.5">
@@ -3204,7 +3302,7 @@ onUnmounted(() => {
               </div>
               <div>
                 <h3 class="text-base font-bold text-[#202124]">Google 账号管家</h3>
-                <p class="text-xs text-[#1a73e8] font-mono font-medium mt-0.5">v3.1.5</p>
+                <p class="text-xs text-[#1a73e8] font-mono font-medium mt-0.5">v3.1.6</p>
               </div>
               <p class="text-xs text-[#5f6368] max-w-md leading-relaxed">
                 面向专业运维与个人多账号管理的高性能轻量跨平台保险库，集成 RFC 6238 2FA 动态码、硬件级免密解锁（Windows Hello / 移动端生物识别）、多隔离环境浏览器会话与 WebDAV 端到端纯密文同步。
