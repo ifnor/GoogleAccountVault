@@ -36,3 +36,12 @@
     public *;
     public static *;
 }
+
+
+# Keep AndroidX WebKit and Chromium support lib boundary interfaces
+-keep class androidx.webkit.** { *; }
+-keep interface androidx.webkit.** { *; }
+-dontwarn androidx.webkit.**
+-keep class org.chromium.support_lib_boundary.** { *; }
+-keep interface org.chromium.support_lib_boundary.** { *; }
+-dontwarn org.chromium.support_lib_boundary.**

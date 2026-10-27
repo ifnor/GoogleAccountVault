@@ -621,7 +621,10 @@ async function openInApp(url: string) {
       url
     });
   } catch (err: any) {
-    notify("打开专属独立会话窗口失败: " + err, "error");
+    notify("应用内浏览器启动异常，正在通过系统浏览器打开", "warning");
+    try {
+      await invoke("open_external_url", { url });
+    } catch (_) {}
   } finally {
     isOpeningBrowser.value = false;
   }

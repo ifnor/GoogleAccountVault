@@ -1,11 +1,14 @@
 package com.google.accountvault
 
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -14,16 +17,14 @@ import android.view.View
 import android.view.ViewGroup
 import android.webkit.*
 import android.widget.*
-import androidx.activity.OnBackPressedCallback
 import androidx.annotation.Keep
-import androidx.appcompat.app.AppCompatActivity
 import org.json.JSONArray
 import org.json.JSONObject
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
 @Keep
-class IsolatedBrowserActivity : AppCompatActivity() {
+class IsolatedBrowserActivity : Activity() {
 
     private lateinit var webView: WebView
     private lateinit var progressBar: ProgressBar
@@ -40,21 +41,30 @@ class IsolatedBrowserActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        try {
+            email = intent.getStringExtra("email") ?: ""
+            targetUrl = intent.getStringExtra("url") ?: "https://accounts.google.com/"
+            password = intent.getStringExtra("password") ?: ""
+            totpSecret = intent.getStringExtra("totpSecret") ?: ""
 
-        email = intent.getStringExtra("email") ?: ""
-        targetUrl = intent.getStringExtra("url") ?: "https://accounts.google.com/"
-        password = intent.getStringExtra("password") ?: ""
-        totpSecret = intent.getStringExtra("totpSecret") ?: ""
+            val rawHash = Math.abs(email.trim().lowercase().hashCode()).toString(16)
+            profileKey = "vault_$rawHash"
 
-        val rawHash = Math.abs(email.trim().lowercase().hashCode()).toString(16)
-        profileKey = "vault_$rawHash"
-
-        initViews()
-        setupBackNavigation()
-        setupWebView()
-        startTotpTicker()
-
-        loadUrlWithIsolation()
+            initViews()
+            setupWebView()
+            startTotpTicker()
+            loadUrlWithIsolation()
+        } catch (e: Throwable) {
+            android.util.Log.e("GoogleAccountVault", "Fatal error in IsolatedBrowserActivity.onCreate", e)
+            try {
+                Toast.makeText(this, "正在切换至系统浏览器打开...", Toast.LENGTH_SHORT).show()
+                val fallbackIntent = Intent(Intent.ACTION_VIEW, Uri.parse(targetUrl)).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                startActivity(fallbackIntent)
+            } catch (_: Throwable) {}
+            finish()
+        }
     }
 
     private fun dpToPx(dp: Int): Int {
@@ -91,7 +101,11 @@ class IsolatedBrowserActivity : AppCompatActivity() {
             gravity = Gravity.CENTER
             layoutParams = LinearLayout.LayoutParams(dpToPx(40), dpToPx(40))
             setOnClickListener {
-                if (webView.canGoBack()) webView.goBack() else finish()
+                if (::webView.isInitialized && webView.canGoBack()) {
+                    webView.goBack()
+                } else {
+                    finish()
+                }
             }
         }
         topBar.addView(backBtn)
@@ -126,7 +140,9 @@ class IsolatedBrowserActivity : AppCompatActivity() {
             setTextColor(Color.parseColor("#5F6368"))
             gravity = Gravity.CENTER
             layoutParams = LinearLayout.LayoutParams(dpToPx(40), dpToPx(40))
-            setOnClickListener { webView.reload() }
+            setOnClickListener {
+                if (::webView.isInitialized) webView.reload()
+            }
         }
         topBar.addView(reloadBtn)
 
@@ -229,30 +245,33 @@ class IsolatedBrowserActivity : AppCompatActivity() {
         }
     }
 
-    private fun setupBackNavigation() {
-        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
-            override fun handleOnBackPressed() {
-                if (webView.canGoBack()) {
-                    webView.goBack()
-                } else {
-                    finish()
-                }
-            }
-        })
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        if (::webView.isInitialized && webView.canGoBack()) {
+            webView.goBack()
+        } else {
+            super.onBackPressed()
+        }
     }
 
     private fun setupWebView() {
         val s = webView.settings
         s.javaScriptEnabled = true
         s.domStorageEnabled = true
-        s.databaseEnabled = true
-        s.setSupportMultipleWindows(true)
+        s.setSupportMultipleWindows(false)
         s.javaScriptCanOpenWindowsAutomatically = true
         s.allowFileAccess = false
         s.allowContentAccess = false
 
         // Standard mobile Chrome User-Agent without '; wv' to guarantee Google authentication compatibility
         s.userAgentString = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.200 Mobile Safari/537.36"
+
+        // Ensure third-party cookies are accepted for Google cross-domain authentication
+        try {
+            val cm = CookieManager.getInstance()
+            cm.setAcceptCookie(true)
+            cm.setAcceptThirdPartyCookies(webView, true)
+        } catch (_: Throwable) {}
 
         webView.webChromeClient = object : WebChromeClient() {
             override fun onProgressChanged(view: WebView?, newProgress: Int) {
@@ -273,7 +292,26 @@ class IsolatedBrowserActivity : AppCompatActivity() {
             }
 
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
-                return false
+                val nextUrl = request?.url?.toString() ?: ""
+                return handleUrl(nextUrl)
+            }
+
+            @Deprecated("Deprecated in Java")
+            override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
+                return handleUrl(url ?: "")
+            }
+
+            private fun handleUrl(nextUrl: String): Boolean {
+                if (nextUrl.startsWith("http://") || nextUrl.startsWith("https://")) {
+                    return false
+                }
+                return try {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(nextUrl))
+                    startActivity(intent)
+                    true
+                } catch (_: Throwable) {
+                    true
+                }
             }
         }
     }
@@ -284,6 +322,7 @@ class IsolatedBrowserActivity : AppCompatActivity() {
     }
 
     private fun injectAutofillScript() {
+        if (!::webView.isInitialized) return
         val emailJson = JSONObject.quote(email)
         val pwdJson = JSONObject.quote(password)
         val totpJson = JSONObject.quote(currentTotpCode)
@@ -361,6 +400,7 @@ class IsolatedBrowserActivity : AppCompatActivity() {
     }
 
     private fun fillEmailManually() {
+        if (!::webView.isInitialized) return
         if (email.isBlank()) {
             Toast.makeText(this, "未配置邮箱", Toast.LENGTH_SHORT).show()
             return
@@ -389,6 +429,7 @@ class IsolatedBrowserActivity : AppCompatActivity() {
     }
 
     private fun fillPasswordManually() {
+        if (!::webView.isInitialized) return
         if (password.isBlank()) {
             Toast.makeText(this, "未配置密码", Toast.LENGTH_SHORT).show()
             return
@@ -416,6 +457,7 @@ class IsolatedBrowserActivity : AppCompatActivity() {
     }
 
     private fun fillTotpManually() {
+        if (!::webView.isInitialized) return
         if (currentTotpCode.isBlank()) {
             Toast.makeText(this, "该账号未配置 2FA 密钥", Toast.LENGTH_SHORT).show()
             return
@@ -445,8 +487,10 @@ class IsolatedBrowserActivity : AppCompatActivity() {
     }
 
     private fun copyToClipboard(label: String, text: String) {
-        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        cm.setPrimaryClip(ClipData.newPlainText(label, text))
+        try {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText(label, text))
+        } catch (_: Throwable) {}
     }
 
     private fun startTotpTicker() {
@@ -468,17 +512,19 @@ class IsolatedBrowserActivity : AppCompatActivity() {
 
     override fun onPause() {
         super.onPause()
-        CookieIsolationHelper.saveCookies(this, webView, profileKey, webView.url)
+        if (::webView.isInitialized) {
+            CookieIsolationHelper.saveCookies(this, webView, profileKey, webView.url)
+        }
     }
 
     override fun onDestroy() {
         totpRunnable?.let { mainHandler.removeCallbacks(it) }
-        CookieIsolationHelper.saveCookies(this, webView, profileKey, webView.url)
-        try {
-            webView.stopLoading()
-            webView.destroy()
-        } catch (e: Exception) {
-            // Ignore
+        if (::webView.isInitialized) {
+            CookieIsolationHelper.saveCookies(this, webView, profileKey, webView.url)
+            try {
+                webView.stopLoading()
+                webView.destroy()
+            } catch (_: Throwable) {}
         }
         super.onDestroy()
     }
@@ -515,7 +561,7 @@ object TotpHelper {
             val otp = binary % 1000000
             val codeStr = String.format("%06d", otp)
             Pair(codeStr, remaining)
-        } catch (e: Exception) {
+        } catch (_: Throwable) {
             Pair("------", 30)
         }
     }
@@ -541,23 +587,28 @@ object TotpHelper {
 
 object CookieIsolationHelper {
     fun setupCookies(context: Context, webView: WebView, profileKey: String) {
-        if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.MULTI_PROFILE)) {
-            try {
-                val profileStore = androidx.webkit.ProfileStore.getInstance()
-                val profile = profileStore.getOrCreateProfile(profileKey)
-                androidx.webkit.WebViewCompat.setProfile(webView, profileKey)
-                return
-            } catch (e: Throwable) {
-                android.util.Log.w("IsolatedBrowser", "MultiProfile unavailable: ${e.message}")
+        try {
+            if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.MULTI_PROFILE)) {
+                try {
+                    val profileStore = androidx.webkit.ProfileStore.getInstance()
+                    val profile = profileStore.getOrCreateProfile(profileKey)
+                    androidx.webkit.WebViewCompat.setProfile(webView, profileKey)
+                    return
+                } catch (e: Throwable) {
+                    android.util.Log.w("IsolatedBrowser", "MultiProfile unavailable: ${e.message}")
+                }
             }
+        } catch (e: Throwable) {
+            android.util.Log.w("IsolatedBrowser", "WebViewFeature check failed: ${e.message}")
         }
 
         // Fallback for older Android engines: restore account cookies into CookieManager
-        val prefs = context.getSharedPreferences("vault_account_cookies", Context.MODE_PRIVATE)
-        val saved = prefs.getString(profileKey, null) ?: return
         try {
+            val prefs = context.getSharedPreferences("vault_account_cookies", Context.MODE_PRIVATE)
+            val saved = prefs.getString(profileKey, null) ?: return
             val cm = CookieManager.getInstance()
             cm.setAcceptCookie(true)
+            cm.setAcceptThirdPartyCookies(webView, true)
             val arr = JSONArray(saved)
             for (i in 0 until arr.length()) {
                 val item = arr.getJSONObject(i)
@@ -566,30 +617,30 @@ object CookieIsolationHelper {
                 cm.setCookie(url, cookie)
             }
             cm.flush()
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             android.util.Log.e("IsolatedBrowser", "Error restoring cookies", e)
         }
     }
 
     fun saveCookies(context: Context, webView: WebView, profileKey: String, currentUrl: String?) {
-        if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.MULTI_PROFILE)) {
-            try {
-                val profileStore = androidx.webkit.ProfileStore.getInstance()
-                val profile = profileStore.getProfile(profileKey)
-                profile?.cookieManager?.flush()
-                return
-            } catch (e: Throwable) {
-                // Ignore
-            }
-        }
-
-        val cm = CookieManager.getInstance()
-        cm.flush()
-        if (currentUrl.isNullOrBlank()) return
-        val cookiesStr = cm.getCookie(currentUrl) ?: return
-
-        val prefs = context.getSharedPreferences("vault_account_cookies", Context.MODE_PRIVATE)
         try {
+            if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.MULTI_PROFILE)) {
+                try {
+                    val profileStore = androidx.webkit.ProfileStore.getInstance()
+                    val profile = profileStore.getProfile(profileKey)
+                    profile?.cookieManager?.flush()
+                    return
+                } catch (_: Throwable) {}
+            }
+        } catch (_: Throwable) {}
+
+        try {
+            val cm = CookieManager.getInstance()
+            cm.flush()
+            if (currentUrl.isNullOrBlank()) return
+            val cookiesStr = cm.getCookie(currentUrl) ?: return
+
+            val prefs = context.getSharedPreferences("vault_account_cookies", Context.MODE_PRIVATE)
             val arr = JSONArray()
             val obj = JSONObject().apply {
                 put("url", currentUrl)
@@ -597,7 +648,7 @@ object CookieIsolationHelper {
             }
             arr.put(obj)
             prefs.edit().putString(profileKey, arr.toString()).apply()
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             android.util.Log.e("IsolatedBrowser", "Error saving cookies", e)
         }
     }

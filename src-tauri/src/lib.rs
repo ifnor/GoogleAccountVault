@@ -416,6 +416,47 @@ fn batch_import_records(
     Ok(imported_count)
 }
 
+#[cfg(target_os = "android")]
+fn find_app_class<'a>(
+    env: &mut jni::JNIEnv<'a>,
+    context_obj: &jni::objects::JObject<'a>,
+    class_name: &str,
+) -> Result<jni::objects::JClass<'a>, String> {
+    if let Ok(class_loader_val) =
+        env.call_method(context_obj, "getClassLoader", "()Ljava/lang/ClassLoader;", &[])
+    {
+        if let Ok(class_loader) = class_loader_val.l() {
+            let dotted = class_name.replace('/', ".");
+            if let Ok(j_name) = env.new_string(&dotted) {
+                let load_res = env.call_method(
+                    &class_loader,
+                    "loadClass",
+                    "(Ljava/lang/String;)Ljava/lang/Class;",
+                    &[jni::objects::JValue::from(&j_name)],
+                );
+                match load_res {
+                    Ok(val) => {
+                        if let Ok(cls) = val.l() {
+                            return Ok(cls.into());
+                        }
+                    }
+                    Err(_) => {
+                        let _ = env.exception_clear();
+                    }
+                }
+            }
+        }
+    }
+
+    match env.find_class(class_name) {
+        Ok(c) => Ok(c),
+        Err(e) => {
+            let _ = env.exception_clear();
+            Err(format!("无法加载应用类 {class_name}: {e}"))
+        }
+    }
+}
+
 #[tauri::command]
 async fn open_in_app_browser(
     _app: tauri::AppHandle,
@@ -555,26 +596,31 @@ async fn open_in_app_browser(
             .new_string(totp_secret.unwrap_or_default())
             .map_err(|e| e.to_string())?;
 
-        let class = env
-            .find_class("com/google/accountvault/MainActivity")
-            .map_err(|e| format!("未找到 MainActivity 类: {e}"))?;
-
-        let res = env.call_static_method(
-            class,
-            "openIsolatedBrowser",
-            "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Z",
-            &[
-                jni::objects::JValue::from(&context_obj),
-                jni::objects::JValue::from(&email_j),
-                jni::objects::JValue::from(&url_j),
-                jni::objects::JValue::from(&pwd_j),
-                jni::objects::JValue::from(&totp_j),
-            ],
-        );
-
-        let opened = match res {
-            Ok(v) => v.z().unwrap_or(false),
-            Err(_) => false,
+        let class_res = find_app_class(&mut env, &context_obj, "com/google/accountvault/MainActivity");
+        let opened = if let Ok(class) = class_res {
+            let res = env.call_static_method(
+                class,
+                "openIsolatedBrowser",
+                "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Z",
+                &[
+                    jni::objects::JValue::from(&context_obj),
+                    jni::objects::JValue::from(&email_j),
+                    jni::objects::JValue::from(&url_j),
+                    jni::objects::JValue::from(&pwd_j),
+                    jni::objects::JValue::from(&totp_j),
+                ],
+            );
+            match res {
+                Ok(v) => v.z().unwrap_or(false),
+                Err(e) => {
+                    eprintln!("JNI 调用 openIsolatedBrowser 异常: {e}");
+                    let _ = env.exception_clear();
+                    false
+                }
+            }
+        } else {
+            eprintln!("find_app_class MainActivity 失败");
+            false
         };
 
         if !opened {
@@ -885,8 +931,7 @@ fn install_apk_android(apk_path: &str) -> Result<(), String> {
         .new_string(apk_path)
         .map_err(|e| format!("创建 APK 路径字符串失败: {e}"))?;
 
-    let class = env
-        .find_class("com/google/accountvault/MainActivity")
+    let class = find_app_class(&mut env, &context_obj, "com/google/accountvault/MainActivity")
         .map_err(|e| format!("未找到 MainActivity 类: {e}"))?;
 
     let res = env
