@@ -160,6 +160,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Determine Release Tag
         id: tag
@@ -174,6 +176,26 @@ jobs:
           fi
           echo "RELEASE_TAG=$TAG" >> $GITHUB_OUTPUT
           echo "Determined release tag: $TAG"
+
+      - name: Generate Changelog from Commits (Clean, No Hash)
+        id: changelog
+        run: |
+          PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)
+          echo "Previous release tag: $PREV_TAG"
+          if [ -n "$PREV_TAG" ]; then
+            COMMITS=$(git log "$PREV_TAG..HEAD" --pretty=format:"* %s" --no-merges)
+          else
+            COMMITS=$(git log -n 15 --pretty=format:"* %s" --no-merges)
+          fi
+
+          if [ -z "$COMMITS" ]; then
+            COMMITS="* 性能优化与细节改进"
+          fi
+
+          printf "### 🚀 本次更新内容\n\n%%s\n" "$COMMITS" > release_body.md
+
+          echo "Generated release notes:"
+          cat release_body.md
 
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
@@ -196,8 +218,8 @@ jobs:
         with:
           tag_name: ${{ steps.tag.outputs.RELEASE_TAG }}
           name: "Google 账号管家 ${{ steps.tag.outputs.RELEASE_TAG }}"
+          body_path: release_body.md
           files: release-assets/*
-          generate_release_notes: true
           draft: false
           prerelease: false
         env:
