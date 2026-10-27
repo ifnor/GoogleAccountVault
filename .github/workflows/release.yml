@@ -183,9 +183,9 @@ jobs:
           PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)
           echo "Previous release tag: $PREV_TAG"
           if [ -n "$PREV_TAG" ]; then
-            COMMITS=$(git log "$PREV_TAG..HEAD" --pretty=format:"* %s" --no-merges)
+            COMMITS=$(git log "$PREV_TAG..HEAD" --pretty=format:"* %s" --no-merges | sed -E 's/[，, ]*(版本)?升级(版本)?至.*$//g')
           else
-            COMMITS=$(git log -n 15 --pretty=format:"* %s" --no-merges)
+            COMMITS=$(git log -n 15 --pretty=format:"* %s" --no-merges | sed -E 's/[，, ]*(版本)?升级(版本)?至.*$//g')
           fi
 
           if [ -z "$COMMITS" ]; then

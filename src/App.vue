@@ -1522,7 +1522,7 @@ onUnmounted(() => {
             class="w-full py-3 bg-[#e8f0fe] hover:bg-[#d2e3fc] active:bg-[#c2dcff] text-[#1a73e8] font-medium rounded-xl transition-all flex items-center justify-center gap-2.5 text-sm border border-[#1a73e8]/30 shadow-sm"
           >
             <Fingerprint class="w-5 h-5 text-[#1a73e8]" />
-            <span>{{ isHelloVerifying ? (isMobilePlatform ? "请在手机弹窗中完成验证..." : "请在 Windows 弹窗中完成验证...") : (isMobilePlatform ? "使用手机生物识别 / 屏幕锁快速解锁" : "使用 Windows Hello / PIN 快速解锁") }}</span>
+            <span>{{ isHelloVerifying ? (isMobilePlatform ? "请在手机弹窗中完成验证..." : "请在 Windows 弹窗中完成验证...") : (isMobilePlatform ? "快速解锁" : "使用 Windows Hello / PIN 快速解锁") }}</span>
           </button>
         </div>
 
@@ -1546,7 +1546,7 @@ onUnmounted(() => {
           </div>
           <div class="flex items-baseline gap-2">
             <span class="font-bold text-base text-[#202124] tracking-tight">Google 账号管家</span>
-            <span class="text-[11px] font-semibold uppercase px-2 py-0.5 bg-[#e8f0fe] text-[#1a73e8] rounded-full">v3.1.8</span>
+            <span class="text-[11px] font-semibold uppercase px-2 py-0.5 bg-[#e8f0fe] text-[#1a73e8] rounded-full">v3.1.9</span>
           </div>
         </div>
 
@@ -3118,7 +3118,7 @@ onUnmounted(() => {
                     <h3 class="text-xs font-bold text-[#202124] flex items-center gap-2 flex-wrap">
                       <span>软件版本检查更新</span>
                       <span class="px-2 py-0.5 rounded-full bg-[#e8f0fe] text-[#1a73e8] text-[10px] font-mono font-bold whitespace-nowrap">
-                        当前: v3.1.8
+                        当前: v3.1.9
                       </span>
                     </h3>
                     <p class="text-[11px] text-[#5f6368] mt-0.5">
@@ -3302,10 +3302,10 @@ onUnmounted(() => {
               </div>
               <div>
                 <h3 class="text-base font-bold text-[#202124]">Google 账号管家</h3>
-                <p class="text-xs text-[#1a73e8] font-mono font-medium mt-0.5">v3.1.8</p>
+                <p class="text-xs text-[#1a73e8] font-mono font-medium mt-0.5">v3.1.9</p>
               </div>
               <p class="text-xs text-[#5f6368] max-w-md leading-relaxed">
-                面向专业运维与个人多账号管理的高性能轻量跨平台保险库，集成 RFC 6238 2FA 动态码、硬件级免密解锁（Windows Hello / 移动端生物识别）、多隔离环境浏览器会话与 WebDAV 端到端纯密文同步。
+                面向专业运维与个人多账号管理的高性能轻量跨平台保险库，集成 RFC 6238 2FA 动态码、硬件级免密解锁、多隔离环境浏览器会话与 WebDAV 端到端纯密文同步。
               </p>
 
               <div class="flex items-center gap-2 pt-1">
