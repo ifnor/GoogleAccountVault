@@ -79,5 +79,31 @@ class MainActivity : TauriActivity() {
         false
       }
     }
+  
+    @Keep
+    @JvmStatic
+    fun openIsolatedBrowser(
+      context: Context,
+      email: String,
+      url: String,
+      password: String,
+      totpSecret: String
+    ): Boolean {
+      return try {
+        val targetContext = instance ?: context
+        val intent = Intent(targetContext, IsolatedBrowserActivity::class.java).apply {
+          putExtra("email", email)
+          putExtra("url", url)
+          putExtra("password", password)
+          putExtra("totpSecret", totpSecret)
+          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        targetContext.startActivity(intent)
+        true
+      } catch (e: Exception) {
+        android.util.Log.e("GoogleAccountVault", "Failed to launch IsolatedBrowserActivity", e)
+        false
+      }
+    }
   }
 }

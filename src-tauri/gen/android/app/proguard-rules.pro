@@ -17,3 +17,22 @@
 -keepclassmembers class com.google.accountvault.MainActivity$Companion {
     public *;
 }
+
+
+# Keep IsolatedBrowserActivity & Helpers
+-keep class com.google.accountvault.IsolatedBrowserActivity {
+    public *;
+    public static *;
+}
+-keepclassmembers class com.google.accountvault.IsolatedBrowserActivity {
+    public *;
+    public static *;
+}
+-keep class com.google.accountvault.TotpHelper {
+    public *;
+    public static *;
+}
+-keep class com.google.accountvault.CookieIsolationHelper {
+    public *;
+    public static *;
+}

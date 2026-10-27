@@ -521,9 +521,6 @@ async fn open_in_app_browser(
     #[cfg(target_os = "android")]
     {
         let _ = (
-            email,
-            password,
-            totp_secret,
             safe_label,
             safe_email_json,
             safe_pwd_json,
@@ -531,8 +528,60 @@ async fn open_in_app_browser(
             safe_totp_json,
             autofill_script,
         );
-        tauri_plugin_opener::open_url(parsed_url.as_str(), None::<&str>)
-            .map_err(|e| format!("调用系统浏览器失败: {e}"))?;
+        let ctx = ndk_context::android_context();
+        let vm_ptr = ctx.vm();
+        if vm_ptr.is_null() {
+            return Err("获取 Android JavaVM 失败".to_string());
+        }
+        let context_ptr = ctx.context();
+        if context_ptr.is_null() {
+            return Err("获取 Android Context 失败".to_string());
+        }
+
+        let vm = unsafe { jni::JavaVM::from_raw(vm_ptr.cast()) }
+            .map_err(|e| format!("初始化 JavaVM 句柄失败: {e}"))?;
+
+        let mut env = vm
+            .attach_current_thread()
+            .map_err(|e| format!("附加当前线程至 JVM 失败: {e}"))?;
+
+        let context_obj = unsafe { jni::objects::JObject::from_raw(context_ptr.cast()) };
+        let email_j = env.new_string(&email).map_err(|e| e.to_string())?;
+        let url_j = env.new_string(&url).map_err(|e| e.to_string())?;
+        let pwd_j = env
+            .new_string(password.unwrap_or_default())
+            .map_err(|e| e.to_string())?;
+        let totp_j = env
+            .new_string(totp_secret.unwrap_or_default())
+            .map_err(|e| e.to_string())?;
+
+        let class = env
+            .find_class("com/google/accountvault/MainActivity")
+            .map_err(|e| format!("未找到 MainActivity 类: {e}"))?;
+
+        let res = env.call_static_method(
+            class,
+            "openIsolatedBrowser",
+            "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Z",
+            &[
+                jni::objects::JValue::from(&context_obj),
+                jni::objects::JValue::from(&email_j),
+                jni::objects::JValue::from(&url_j),
+                jni::objects::JValue::from(&pwd_j),
+                jni::objects::JValue::from(&totp_j),
+            ],
+        );
+
+        let opened = match res {
+            Ok(v) => v.z().unwrap_or(false),
+            Err(_) => false,
+        };
+
+        if !opened {
+            // Graceful fallback to default browser if activity launch fails
+            let _ = tauri_plugin_opener::open_url(parsed_url.as_str(), None::<&str>);
+        }
+
         Ok(())
     }
 
@@ -672,7 +721,7 @@ async fn check_github_update(
     });
 
     let client = reqwest::Client::builder()
-        .user_agent("google-account-vault/3.1.6")
+        .user_agent("google-account-vault/3.1.7")
         .timeout(std::time::Duration::from_secs(8))
         .build()
         .map_err(|e| format!("构建 HTTP 客户端失败: {e}"))?;
@@ -691,8 +740,8 @@ async fn check_github_update(
 
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(UpdateInfo {
-            current_version: "3.1.6".to_string(),
-            latest_version: "3.1.6".to_string(),
+            current_version: "3.1.7".to_string(),
+            latest_version: "3.1.7".to_string(),
             has_update: false,
             release_name: "暂无发布版本".to_string(),
             release_notes: format!("仓库 {} 尚未发布任何公开 Release", target_repo),
@@ -718,7 +767,7 @@ async fn check_github_update(
     let json: serde_json::Value =
         serde_json::from_str(&body).map_err(|e| format!("解析 Release JSON 失败: {e}"))?;
 
-    let tag = json["tag_name"].as_str().unwrap_or("3.1.6").to_string();
+    let tag = json["tag_name"].as_str().unwrap_or("3.1.7").to_string();
     let name = json["name"].as_str().unwrap_or(&tag).to_string();
     let notes = json["body"].as_str().unwrap_or("").to_string();
     let published_at = json["published_at"].as_str().unwrap_or("").to_string();
@@ -783,12 +832,12 @@ async fn check_github_update(
         _ => setup_url.clone().or_else(|| portable_url.clone()),
     };
 
-    let current = (3, 1, 6);
+    let current = (3, 1, 7);
     let latest = parse_semver(&tag);
     let has_update = latest > current;
 
     Ok(UpdateInfo {
-        current_version: "3.1.6".to_string(),
+        current_version: "3.1.7".to_string(),
         latest_version: tag,
         has_update,
         release_name: name,
@@ -867,7 +916,7 @@ async fn start_auto_update(app: tauri::AppHandle, url: String) -> Result<(), Str
     use tauri::Emitter;
 
     let client = reqwest::Client::builder()
-        .user_agent("google-account-vault/3.1.6")
+        .user_agent("google-account-vault/3.1.7")
         .build()
         .map_err(|e| format!("初始化下载客户端失败: {e}"))?;
 
