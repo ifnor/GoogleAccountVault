@@ -180,6 +180,7 @@ jobs:
       - name: Generate Changelog from Commits (Clean, No Hash)
         id: changelog
         run: |
+          git fetch --tags --force || true
           PREV_TAG=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || true)
           echo "Previous release tag: $PREV_TAG"
           if [ -n "$PREV_TAG" ]; then
@@ -192,7 +193,9 @@ jobs:
             COMMITS="* 性能优化与细节改进"
           fi
 
-          printf "### 🚀 本次更新内容\n\n%%s\n" "$COMMITS" > release_body.md
+          echo "### 🚀 本次更新内容" > release_body.md
+          echo "" >> release_body.md
+          echo "$COMMITS" >> release_body.md
 
           echo "Generated release notes:"
           cat release_body.md
