@@ -3,12 +3,14 @@ package com.google.accountvault
 import android.app.Activity
 import android.app.ActivityManager
 import android.app.AlertDialog
+import android.app.Dialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Build
@@ -18,7 +20,9 @@ import android.os.Looper
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.ViewGroup
+import android.view.Window
 import android.webkit.*
 import android.widget.*
 import androidx.annotation.Keep
@@ -38,6 +42,7 @@ class IsolatedBrowserActivity : Activity() {
     private var totpSecret: String = ""
     private var recoveryEmail: String = ""
     private var currentTotpCode: String = ""
+    private var currentTotpRemaining: Int = 30
     private var profileKey: String = ""
     private var isDesktopMode: Boolean = false
 
@@ -345,11 +350,11 @@ class IsolatedBrowserActivity : Activity() {
             elevation = dpToPx(8).toFloat()
         }
 
-        // 1. Collapsed View (默认小巧贴边药丸)
+        // 1. Collapsed View (默认小巧贴边药丸，带拖拽把手图标)
         floatingCollapsedView = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dpToPx(12), dpToPx(7), dpToPx(12), dpToPx(7))
+            setPadding(dpToPx(10), dpToPx(7), dpToPx(12), dpToPx(7))
             val bg = GradientDrawable().apply {
                 shape = GradientDrawable.RECTANGLE
                 cornerRadius = dpToPx(18).toFloat()
@@ -357,13 +362,10 @@ class IsolatedBrowserActivity : Activity() {
                 setStroke(dpToPx(1), Color.parseColor("#DADCE0"))
             }
             background = bg
-            setOnClickListener {
-                expandFloatingPill()
-            }
         }
 
         floatingSummaryText = TextView(this).apply {
-            text = "⏱️ 凭据"
+            text = "⠿ ⏱️ 凭据"
             textSize = 12f
             setTypeface(null, Typeface.BOLD)
             setTextColor(Color.parseColor("#1A73E8"))
@@ -430,6 +432,7 @@ class IsolatedBrowserActivity : Activity() {
         floatingPillContainer.addView(floatingExpandedView)
         container.addView(floatingPillContainer)
 
+        // 解决拖拽误触发点击的关键：在 TouchListener 中精确区分点击与拖拽
         setupFloatingDrag()
     }
 
@@ -487,17 +490,27 @@ class IsolatedBrowserActivity : Activity() {
 
     private var dY = 0f
     private fun setupFloatingDrag() {
-        var startY = 0f
-        floatingCollapsedView.setOnTouchListener { _, event ->
+        var startRawY = 0f
+        var startRawX = 0f
+        var isDragging = false
+        val touchSlop = ViewConfiguration.get(this).scaledTouchSlop
+
+        floatingCollapsedView.setOnTouchListener { view, event ->
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    startY = event.rawY
+                    startRawX = event.rawX
+                    startRawY = event.rawY
                     dY = floatingPillContainer.y - event.rawY
-                    false
+                    isDragging = false
+                    view.isPressed = true
+                    true
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    val delta = Math.abs(event.rawY - startY)
-                    if (delta > dpToPx(6)) {
+                    val deltaY = Math.abs(event.rawY - startRawY)
+                    val deltaX = Math.abs(event.rawX - startRawX)
+                    if (deltaY > touchSlop || deltaX > touchSlop) {
+                        isDragging = true
+                        view.isPressed = false
                         val newY = event.rawY + dY
                         val parent = floatingPillContainer.parent as? View
                         if (parent != null) {
@@ -505,10 +518,22 @@ class IsolatedBrowserActivity : Activity() {
                             val minY = dpToPx(10).toFloat()
                             floatingPillContainer.y = newY.coerceIn(minY, maxY.toFloat())
                         }
-                        true
-                    } else {
-                        false
                     }
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    view.isPressed = false
+                    if (!isDragging) {
+                        // 仅在非拖拽状态下的纯点击才展开悬浮胶囊，彻底杜绝移动误触
+                        expandFloatingPill()
+                    }
+                    isDragging = false
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    view.isPressed = false
+                    isDragging = false
+                    true
                 }
                 else -> false
             }
@@ -518,73 +543,404 @@ class IsolatedBrowserActivity : Activity() {
     private fun updateFloatingPillText(remaining: Int = 30) {
         if (!::floatingSummaryText.isInitialized) return
         if (currentTotpCode.isNotBlank() && currentTotpCode != "------") {
-            floatingSummaryText.text = "⏱️ $currentTotpCode (${remaining}s)"
+            floatingSummaryText.text = "⠿ ⏱️ $currentTotpCode (${remaining}s)"
         } else if (recoveryEmail.isNotBlank()) {
-            floatingSummaryText.text = "🛡️ 辅助凭据"
+            floatingSummaryText.text = "⠿ 🛡️ 辅助凭据"
         } else {
-            floatingSummaryText.text = "🔑 快捷凭据"
+            floatingSummaryText.text = "⠿ 🔑 快捷凭据"
         }
     }
 
+    /**
+     * 现代化微信小程序风【底部抽屉快捷面板】(Bottom Sheet ActionSheet)
+     */
     private fun showCapsuleMenu() {
         val current = if (::webView.isInitialized) (webView.url ?: targetUrl) else targetUrl
-        val modeLabel = if (isDesktopMode) "📱 切换为移动版网页" else "🖥️ 切换为桌面版网页"
-        val pillToggleLabel = if (showFloatingPill) "🔘 隐藏贴边悬浮球" else "🔘 显示贴边悬浮球"
-        val recLabel = if (recoveryEmail.isNotBlank()) "🛡️ 填入辅助邮箱 ($recoveryEmail)" else "🛡️ 填入辅助邮箱 (未配置)"
-        val totpLabel = if (currentTotpCode.isNotBlank() && currentTotpCode != "------") "⏱️ 填入 2FA 动态码 ($currentTotpCode)" else "⏱️ 填入 2FA 动态码 (未配置)"
+        val dialog = Dialog(this)
+        dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
 
-        val items = arrayOf(
-            "📧 填入/复制主邮箱 ($email)",
-            "🔑 填入/复制密码",
-            recLabel,
-            totpLabel,
-            "──────────────",
-            "🔄 刷新页面",
-            "📋 复制当前网址",
-            "🌐 在系统外部浏览器打开",
-            modeLabel,
-            pillToggleLabel,
-            "🧹 清理沙箱缓存 & Cookie",
-            "ℹ️ 账号详情"
-        )
-        AlertDialog.Builder(this)
-            .setTitle(if (email.isNotBlank()) email else "Google 独立沙箱")
-            .setItems(items) { _, which ->
-                when (which) {
-                    0 -> fillEmailManually()
-                    1 -> fillPasswordManually()
-                    2 -> fillRecoveryEmailManually()
-                    3 -> fillTotpManually()
-                    4 -> {} // Separator
-                    5 -> if (::webView.isInitialized) webView.reload()
-                    6 -> {
-                        copyToClipboard("网址", current)
-                        Toast.makeText(this, "网址已复制到剪贴板", Toast.LENGTH_SHORT).show()
-                    }
-                    7 -> {
-                        try {
-                            val extIntent = Intent(Intent.ACTION_VIEW, Uri.parse(current)).apply {
-                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            }
-                            startActivity(extIntent)
-                        } catch (e: Exception) {
-                            Toast.makeText(this, "未找到可用外部浏览器", Toast.LENGTH_SHORT).show()
-                        }
-                    }
-                    8 -> toggleDesktopMode()
-                    9 -> {
-                        showFloatingPill = !showFloatingPill
-                        if (::floatingPillContainer.isInitialized) {
-                            floatingPillContainer.visibility = if (showFloatingPill) View.VISIBLE else View.GONE
-                        }
-                        Toast.makeText(this, if (showFloatingPill) "已开启贴边悬浮球" else "已隐藏贴边悬浮球", Toast.LENGTH_SHORT).show()
-                    }
-                    10 -> clearSandboxStorage()
-                    11 -> showAccountDetailsDialog()
-                }
+        val dialogRoot = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            val bg = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadii = floatArrayOf(
+                    dpToPx(24).toFloat(), dpToPx(24).toFloat(),
+                    dpToPx(24).toFloat(), dpToPx(24).toFloat(),
+                    0f, 0f, 0f, 0f
+                )
+                setColor(Color.WHITE)
             }
-            .setNegativeButton("取消", null)
-            .show()
+            background = bg
+            setPadding(dpToPx(16), dpToPx(10), dpToPx(16), dpToPx(16))
+        }
+
+        // 1. 顶部手势指示条
+        val handle = View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(dpToPx(38), dpToPx(4)).apply {
+                gravity = Gravity.CENTER_HORIZONTAL
+                bottomMargin = dpToPx(12)
+            }
+            val handleBg = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dpToPx(2).toFloat()
+                setColor(Color.parseColor("#DADCE0"))
+            }
+            background = handleBg
+        }
+        dialogRoot.addView(handle)
+
+        // 2. 账号头部信息 (G 图标徽标 + 邮箱 + 隔离沙箱副标题 + 关闭 ✕)
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dpToPx(14)
+            }
+        }
+        val avatar = TextView(this).apply {
+            text = "G"
+            textSize = 15f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#1A73E8"))
+            gravity = Gravity.CENTER
+            val avatarBg = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.parseColor("#E8F0FE"))
+            }
+            background = avatarBg
+            layoutParams = LinearLayout.LayoutParams(dpToPx(36), dpToPx(36))
+        }
+        header.addView(avatar)
+
+        val headerInfo = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginStart = dpToPx(10)
+                marginEnd = dpToPx(10)
+            }
+        }
+        val accountEmailTv = TextView(this).apply {
+            text = if (email.isNotBlank()) email else "Google 账号"
+            textSize = 14.5f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#202124"))
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        val accountSubTv = TextView(this).apply {
+            text = "独立安全沙箱 · 🔒 数据隔离"
+            textSize = 11f
+            setTextColor(Color.parseColor("#5F6368"))
+        }
+        headerInfo.addView(accountEmailTv)
+        headerInfo.addView(accountSubTv)
+        header.addView(headerInfo)
+
+        val closeHeaderBtn = TextView(this).apply {
+            text = "✕"
+            textSize = 15f
+            setTextColor(Color.parseColor("#5F6368"))
+            gravity = Gravity.CENTER
+            setPadding(dpToPx(8), dpToPx(8), dpToPx(8), dpToPx(8))
+            setOnClickListener { dialog.dismiss() }
+        }
+        header.addView(closeHeaderBtn)
+        dialogRoot.addView(header)
+
+        // 3. 凭据专区标题
+        val section1Title = TextView(this).apply {
+            text = "快捷凭据（轻触一键填入并复制）"
+            textSize = 11.5f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#5F6368"))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dpToPx(8)
+            }
+        }
+        dialogRoot.addView(section1Title)
+
+        // 4. 2x2 凭据卡片精致网格
+        // Row 1: 主邮箱 + 登录密码
+        val credRow1 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dpToPx(6)
+            }
+        }
+        val cardEmail = createCredentialCard(
+            "📧", "主邮箱",
+            if (email.isNotBlank()) email else "(未配置)",
+            "#1A73E8", "#F8FAFD", "#E8EAED"
+        ) {
+            fillEmailManually()
+            dialog.dismiss()
+        }
+        val cardPwd = createCredentialCard(
+            "🔑", "登录密码",
+            if (password.isNotBlank()) "••••••••" else "(未配置)",
+            "#202124", "#F8FAFD", "#E8EAED"
+        ) {
+            fillPasswordManually()
+            dialog.dismiss()
+        }
+        credRow1.addView(cardEmail)
+        credRow1.addView(cardPwd)
+        dialogRoot.addView(credRow1)
+
+        // Row 2: 辅助邮箱 + 2FA 动态码
+        val credRow2 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dpToPx(14)
+            }
+        }
+        val cardRec = createCredentialCard(
+            "🛡️", "辅助邮箱",
+            if (recoveryEmail.isNotBlank()) recoveryEmail else "(未配置)",
+            "#188038", "#F8FAFD", "#E8EAED"
+        ) {
+            fillRecoveryEmailManually()
+            dialog.dismiss()
+        }
+        val cardTotp = createCredentialCard(
+            "⏱️", "2FA 动态码",
+            if (currentTotpCode.isNotBlank() && currentTotpCode != "------") "$currentTotpCode (${currentTotpRemaining}s)" else "(未配置)",
+            "#1A73E8", "#E8F0FE", "#D2E3FC"
+        ) {
+            fillTotpManually()
+            dialog.dismiss()
+        }
+        credRow2.addView(cardRec)
+        credRow2.addView(cardTotp)
+        dialogRoot.addView(credRow2)
+
+        // 5. 快捷工具专区标题
+        val section2Title = TextView(this).apply {
+            text = "沙箱快捷工具"
+            textSize = 11.5f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#5F6368"))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dpToPx(8)
+            }
+        }
+        dialogRoot.addView(section2Title)
+
+        // 6. 3 列宫格快捷操作按钮 (Row 1: 刷新 | 复制网址 | 外部打开)
+        val toolsRow1 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dpToPx(6)
+            }
+        }
+        val btnReload = createToolButton("🔄", "刷新页面") {
+            if (::webView.isInitialized) webView.reload()
+            dialog.dismiss()
+        }
+        val btnCopyUrl = createToolButton("📋", "复制网址") {
+            copyToClipboard("网址", current)
+            Toast.makeText(this@IsolatedBrowserActivity, "网址已复制到剪贴板", Toast.LENGTH_SHORT).show()
+            dialog.dismiss()
+        }
+        val btnOpenExt = createToolButton("🌐", "外部打开") {
+            try {
+                val extIntent = Intent(Intent.ACTION_VIEW, Uri.parse(current)).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                startActivity(extIntent)
+            } catch (_: Exception) {
+                Toast.makeText(this@IsolatedBrowserActivity, "未找到可用外部浏览器", Toast.LENGTH_SHORT).show()
+            }
+            dialog.dismiss()
+        }
+        toolsRow1.addView(btnReload)
+        toolsRow1.addView(btnCopyUrl)
+        toolsRow1.addView(btnOpenExt)
+        dialogRoot.addView(toolsRow1)
+
+        // Tools Row 2: 切换 UA | 贴边悬浮球 | 清理沙箱
+        val toolsRow2 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = dpToPx(14)
+            }
+        }
+        val btnToggleUa = createToolButton(if (isDesktopMode) "📱" else "🖥️", if (isDesktopMode) "切移动版" else "切桌面版") {
+            toggleDesktopMode()
+            dialog.dismiss()
+        }
+        val btnTogglePill = createToolButton("🔘", if (showFloatingPill) "隐藏悬浮球" else "显示悬浮球") {
+            showFloatingPill = !showFloatingPill
+            if (::floatingPillContainer.isInitialized) {
+                floatingPillContainer.visibility = if (showFloatingPill) View.VISIBLE else View.GONE
+            }
+            Toast.makeText(this@IsolatedBrowserActivity, if (showFloatingPill) "已开启贴边悬浮球" else "已隐藏贴边悬浮球", Toast.LENGTH_SHORT).show()
+            dialog.dismiss()
+        }
+        val btnClear = createToolButton("🧹", "清理沙箱") {
+            dialog.dismiss()
+            clearSandboxStorage()
+        }
+        toolsRow2.addView(btnToggleUa)
+        toolsRow2.addView(btnTogglePill)
+        toolsRow2.addView(btnClear)
+        dialogRoot.addView(toolsRow2)
+
+        // 7. 底部关闭大按钮
+        val cancelBtn = TextView(this).apply {
+            text = "关闭面板"
+            textSize = 14f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#3C4043"))
+            gravity = Gravity.CENTER
+            val cancelBg = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dpToPx(12).toFloat()
+                setColor(Color.parseColor("#F1F3F4"))
+            }
+            background = cancelBg
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dpToPx(44)
+            )
+            setOnClickListener { dialog.dismiss() }
+        }
+        dialogRoot.addView(cancelBtn)
+
+        dialog.setContentView(dialogRoot)
+        val window = dialog.window
+        if (window != null) {
+            window.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            window.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            window.setGravity(Gravity.BOTTOM)
+            window.attributes?.windowAnimations = android.R.style.Animation_InputMethod
+        }
+        dialog.show()
+    }
+
+    private fun createCredentialCard(
+        icon: String,
+        label: String,
+        value: String,
+        valueColorHex: String,
+        bgColorHex: String,
+        borderColorHex: String,
+        onClick: () -> Unit
+    ): LinearLayout {
+        val bg = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dpToPx(12).toFloat()
+            setColor(Color.parseColor(bgColorHex))
+            setStroke(dpToPx(1), Color.parseColor(borderColorHex))
+        }
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = bg
+            setPadding(dpToPx(10), dpToPx(10), dpToPx(10), dpToPx(10))
+            isClickable = true
+            isFocusable = true
+            val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginStart = dpToPx(3)
+                marginEnd = dpToPx(3)
+            }
+            layoutParams = lp
+            setOnClickListener { onClick() }
+        }
+
+        // Top Row: Icon + Label
+        val topRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val iconTv = TextView(this).apply {
+            text = icon
+            textSize = 13f
+        }
+        val labelTv = TextView(this).apply {
+            text = " $label"
+            textSize = 11.5f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#3C4043"))
+        }
+        topRow.addView(iconTv)
+        topRow.addView(labelTv)
+        card.addView(topRow)
+
+        // Bottom Row: Value
+        val valueTv = TextView(this).apply {
+            text = value
+            textSize = 12f
+            setTextColor(Color.parseColor(valueColorHex))
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            setPadding(0, dpToPx(4), 0, 0)
+        }
+        card.addView(valueTv)
+
+        return card
+    }
+
+    private fun createToolButton(
+        icon: String,
+        label: String,
+        onClick: () -> Unit
+    ): LinearLayout {
+        val bg = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dpToPx(10).toFloat()
+            setColor(Color.parseColor("#F8FAFD"))
+            setStroke(dpToPx(1), Color.parseColor("#E8EAED"))
+        }
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            background = bg
+            setPadding(dpToPx(4), dpToPx(10), dpToPx(4), dpToPx(10))
+            isClickable = true
+            isFocusable = true
+            val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginStart = dpToPx(3)
+                marginEnd = dpToPx(3)
+            }
+            layoutParams = lp
+            setOnClickListener { onClick() }
+
+            val iconTv = TextView(this@IsolatedBrowserActivity).apply {
+                text = icon
+                textSize = 18f
+                gravity = Gravity.CENTER
+            }
+            val labelTv = TextView(this@IsolatedBrowserActivity).apply {
+                text = label
+                textSize = 11f
+                setTextColor(Color.parseColor("#3C4043"))
+                gravity = Gravity.CENTER
+                setPadding(0, dpToPx(4), 0, 0)
+            }
+            addView(iconTv)
+            addView(labelTv)
+        }
     }
 
     private fun toggleDesktopMode() {
@@ -629,30 +985,6 @@ class IsolatedBrowserActivity : Activity() {
                 }
             }
             .setNegativeButton("取消", null)
-            .show()
-    }
-
-    private fun showAccountDetailsDialog() {
-        val pwdMasked = if (password.isNotBlank()) "••••••••" else "(未配置)"
-        val totpStatus = if (totpSecret.isNotBlank()) "已配置 (当前码: $currentTotpCode)" else "(未配置)"
-        val recStatus = if (recoveryEmail.isNotBlank()) recoveryEmail else "(未配置)"
-        val msg = "主邮箱：$email\n密码：$pwdMasked\n辅助邮箱：$recStatus\n2FA：$totpStatus\n沙箱标识：$profileKey"
-        AlertDialog.Builder(this)
-            .setTitle("账号沙箱凭据")
-            .setMessage(msg)
-            .setPositiveButton("复制辅助邮箱") { _, _ ->
-                if (recoveryEmail.isNotBlank()) {
-                    copyToClipboard("辅助邮箱", recoveryEmail)
-                    Toast.makeText(this, "辅助邮箱已复制", Toast.LENGTH_SHORT).show()
-                }
-            }
-            .setNeutralButton("复制 2FA") { _, _ ->
-                if (currentTotpCode.isNotBlank() && currentTotpCode != "------") {
-                    copyToClipboard("2FA 动态码", currentTotpCode)
-                    Toast.makeText(this, "2FA 动态码已复制", Toast.LENGTH_SHORT).show()
-                }
-            }
-            .setNegativeButton("关闭", null)
             .show()
     }
 
@@ -973,6 +1305,7 @@ class IsolatedBrowserActivity : Activity() {
             override fun run() {
                 val (code, remaining) = TotpHelper.generateTotp(totpSecret)
                 currentTotpCode = code
+                currentTotpRemaining = remaining
                 updateFloatingPillText(remaining)
                 mainHandler.postDelayed(this, 1000)
             }
