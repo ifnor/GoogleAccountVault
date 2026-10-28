@@ -91,12 +91,17 @@ class MainActivity : TauriActivity() {
     ): Boolean {
       val targetContext = instance ?: context
       return try {
+        val rawHash = Math.abs(email.trim().lowercase().hashCode()).toString(16)
         val intent = Intent(targetContext, IsolatedBrowserActivity::class.java).apply {
           putExtra("email", email)
           putExtra("url", url)
           putExtra("password", password)
           putExtra("totpSecret", totpSecret)
-          addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+          // 独立并发文档任务栈标记（微信小程序式独立多任务）
+          addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT)
+          addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+          addFlags(Intent.FLAG_ACTIVITY_RETAIN_IN_RECENTS)
+          data = Uri.parse("vault://account/$rawHash")
         }
         targetContext.startActivity(intent)
         true

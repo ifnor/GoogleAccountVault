@@ -1,6 +1,8 @@
 package com.google.accountvault
 
 import android.app.Activity
+import android.app.ActivityManager
+import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -9,6 +11,7 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -35,6 +38,7 @@ class IsolatedBrowserActivity : Activity() {
     private var totpSecret: String = ""
     private var currentTotpCode: String = ""
     private var profileKey: String = ""
+    private var isDesktopMode: Boolean = false
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var totpRunnable: Runnable? = null
@@ -49,6 +53,16 @@ class IsolatedBrowserActivity : Activity() {
 
             val rawHash = Math.abs(email.trim().lowercase().hashCode()).toString(16)
             profileKey = "vault_$rawHash"
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                val taskTitle = if (email.isNotBlank()) "Google · $email" else "Google 独立沙箱"
+                val taskDesc = ActivityManager.TaskDescription(
+                    taskTitle,
+                    null,
+                    Color.parseColor("#1A73E8")
+                )
+                setTaskDescription(taskDesc)
+            }
 
             initViews()
             setupWebView()
@@ -67,6 +81,25 @@ class IsolatedBrowserActivity : Activity() {
         }
     }
 
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        val newEmail = intent?.getStringExtra("email")
+        if (!newEmail.isNullOrBlank()) email = newEmail
+        val newPwd = intent?.getStringExtra("password")
+        if (!newPwd.isNullOrBlank()) password = newPwd
+        val newTotp = intent?.getStringExtra("totpSecret")
+        if (!newTotp.isNullOrBlank()) totpSecret = newTotp
+
+        val newUrl = intent?.getStringExtra("url")
+        if (!newUrl.isNullOrBlank() && newUrl != targetUrl) {
+            targetUrl = newUrl
+            if (::webView.isInitialized) {
+                webView.loadUrl(targetUrl)
+            }
+        }
+    }
+
     private fun dpToPx(dp: Int): Int {
         return (dp * resources.displayMetrics.density).toInt()
     }
@@ -81,7 +114,7 @@ class IsolatedBrowserActivity : Activity() {
             setBackgroundColor(Color.WHITE)
         }
 
-        // ================= 1. Top Header Bar =================
+        // ================= 1. Top Header Bar (WeChat Capsule Style) =================
         val topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(
@@ -90,41 +123,78 @@ class IsolatedBrowserActivity : Activity() {
             )
             gravity = Gravity.CENTER_VERTICAL
             setBackgroundColor(Color.parseColor("#F8FAFD"))
-            setPadding(dpToPx(6), 0, dpToPx(6), 0)
+            setPadding(dpToPx(8), 0, dpToPx(8), 0)
         }
 
-        // Back Button
-        val backBtn = TextView(this).apply {
-            text = "←"
-            textSize = 22f
+        // 1.1 Left: Back to Main App Button (返回管家本体)
+        val hostBtnShape = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dpToPx(14).toFloat()
+            setColor(Color.parseColor("#E8F0FE"))
+        }
+        val backToHostBtn = TextView(this).apply {
+            text = "⇲ 管家"
+            textSize = 12f
+            setTypeface(null, Typeface.BOLD)
             setTextColor(Color.parseColor("#1A73E8"))
+            background = hostBtnShape
             gravity = Gravity.CENTER
-            layoutParams = LinearLayout.LayoutParams(dpToPx(40), dpToPx(40))
+            setPadding(dpToPx(8), dpToPx(4), dpToPx(8), dpToPx(4))
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                dpToPx(30)
+            )
+            setOnClickListener {
+                try {
+                    val hostIntent = Intent(this@IsolatedBrowserActivity, MainActivity::class.java).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                    }
+                    startActivity(hostIntent)
+                } catch (_: Throwable) {
+                    moveTaskToBack(true)
+                }
+            }
+        }
+        topBar.addView(backToHostBtn)
+
+        // 1.2 Web Navigation Back Button (网页内后退)
+        val webBackBtn = TextView(this).apply {
+            text = "‹"
+            textSize = 22f
+            setTextColor(Color.parseColor("#5F6368"))
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(dpToPx(28), dpToPx(36)).apply {
+                marginStart = dpToPx(2)
+            }
             setOnClickListener {
                 if (::webView.isInitialized && webView.canGoBack()) {
                     webView.goBack()
                 } else {
-                    finish()
+                    moveTaskToBack(true)
                 }
             }
         }
-        topBar.addView(backBtn)
+        topBar.addView(webBackBtn)
 
-        // Center Title & Account info
+        // 1.3 Center: Title & Email Subtitle
         val centerInfo = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            setPadding(dpToPx(8), 0, dpToPx(8), 0)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginStart = dpToPx(4)
+                marginEnd = dpToPx(4)
+            }
         }
         val titleView = TextView(this).apply {
-            text = "Google 独立会话"
-            textSize = 14f
+            text = "Google 独立沙箱 🔒"
+            textSize = 13f
             setTypeface(null, Typeface.BOLD)
             setTextColor(Color.parseColor("#202124"))
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
         }
         val subView = TextView(this).apply {
-            text = email
-            textSize = 11f
+            text = if (email.isNotBlank()) email else "独立会话"
+            textSize = 10.5f
             setTextColor(Color.parseColor("#5F6368"))
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
@@ -133,30 +203,55 @@ class IsolatedBrowserActivity : Activity() {
         centerInfo.addView(subView)
         topBar.addView(centerInfo)
 
-        // Refresh Button
-        val reloadBtn = TextView(this).apply {
-            text = "↻"
-            textSize = 20f
-            setTextColor(Color.parseColor("#5F6368"))
+        // 1.4 Right: WeChat Capsule Controller [ ··· | ✕ ]
+        val capsuleContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(dpToPx(76), dpToPx(32))
+            gravity = Gravity.CENTER_VERTICAL
+            val capsuleShape = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dpToPx(16).toFloat()
+                setColor(Color.WHITE)
+                setStroke(dpToPx(1), Color.parseColor("#DADCE0"))
+            }
+            background = capsuleShape
+        }
+
+        // More options button (···)
+        val moreBtn = TextView(this).apply {
+            text = "···"
+            textSize = 15f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#3C4043"))
             gravity = Gravity.CENTER
-            layoutParams = LinearLayout.LayoutParams(dpToPx(40), dpToPx(40))
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
             setOnClickListener {
-                if (::webView.isInitialized) webView.reload()
+                showCapsuleMenu()
             }
         }
-        topBar.addView(reloadBtn)
+        capsuleContainer.addView(moreBtn)
 
-        // Close Button
+        // Divider line (|)
+        val capsuleDivider = View(this).apply {
+            layoutParams = LinearLayout.LayoutParams(dpToPx(1), dpToPx(16))
+            setBackgroundColor(Color.parseColor("#DADCE0"))
+        }
+        capsuleContainer.addView(capsuleDivider)
+
+        // Close button (✕)
         val closeBtn = TextView(this).apply {
             text = "✕"
-            textSize = 18f
-            setTextColor(Color.parseColor("#5F6368"))
+            textSize = 13f
+            setTextColor(Color.parseColor("#3C4043"))
             gravity = Gravity.CENTER
-            layoutParams = LinearLayout.LayoutParams(dpToPx(40), dpToPx(40))
-            setOnClickListener { finish() }
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+            setOnClickListener {
+                closeSandboxTask()
+            }
         }
-        topBar.addView(closeBtn)
+        capsuleContainer.addView(closeBtn)
 
+        topBar.addView(capsuleContainer)
         rootLayout.addView(topBar)
 
         // ================= 2. Loading Progress Bar =================
@@ -217,6 +312,129 @@ class IsolatedBrowserActivity : Activity() {
         setContentView(rootLayout)
     }
 
+    private fun showCapsuleMenu() {
+        val current = if (::webView.isInitialized) (webView.url ?: targetUrl) else targetUrl
+        val modeLabel = if (isDesktopMode) "📱 切换为移动版网页" else "🖥️ 切换为桌面版网页"
+        val items = arrayOf(
+            "📋 复制当前网址",
+            "🔄 刷新页面",
+            "🌐 在系统外部浏览器打开",
+            modeLabel,
+            "🧹 清理沙箱缓存 & Cookie",
+            "ℹ️ 账号详情"
+        )
+        AlertDialog.Builder(this)
+            .setTitle(if (email.isNotBlank()) email else "Google 独立沙箱")
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> {
+                        copyToClipboard("网址", current)
+                        Toast.makeText(this, "网址已复制到剪贴板", Toast.LENGTH_SHORT).show()
+                    }
+                    1 -> {
+                        if (::webView.isInitialized) webView.reload()
+                    }
+                    2 -> {
+                        try {
+                            val extIntent = Intent(Intent.ACTION_VIEW, Uri.parse(current)).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            }
+                            startActivity(extIntent)
+                        } catch (e: Exception) {
+                            Toast.makeText(this, "未找到可用外部浏览器", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    3 -> {
+                        toggleDesktopMode()
+                    }
+                    4 -> {
+                        clearSandboxStorage()
+                    }
+                    5 -> {
+                        showAccountDetailsDialog()
+                    }
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun toggleDesktopMode() {
+        if (!::webView.isInitialized) return
+        isDesktopMode = !isDesktopMode
+        val s = webView.settings
+        if (isDesktopMode) {
+            s.userAgentString = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+            Toast.makeText(this, "已切换为桌面版 UA", Toast.LENGTH_SHORT).show()
+        } else {
+            s.userAgentString = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.200 Mobile Safari/537.36"
+            Toast.makeText(this, "已切换为移动版 UA", Toast.LENGTH_SHORT).show()
+        }
+        webView.reload()
+    }
+
+    private fun clearSandboxStorage() {
+        AlertDialog.Builder(this)
+            .setTitle("清理独立沙箱")
+            .setMessage("确定要清除【$email】此沙箱下的所有 Cookie 与本地缓存吗？这会登出当前 Google 会话。")
+            .setPositiveButton("确定清理") { _, _ ->
+                try {
+                    if (::webView.isInitialized) {
+                        webView.clearCache(true)
+                        webView.clearFormData()
+                        webView.clearHistory()
+                    }
+                    val prefs = getSharedPreferences("vault_account_cookies", Context.MODE_PRIVATE)
+                    prefs.edit().remove(profileKey).apply()
+                    if (androidx.webkit.WebViewFeature.isFeatureSupported(androidx.webkit.WebViewFeature.MULTI_PROFILE)) {
+                        try {
+                            val profileStore = androidx.webkit.ProfileStore.getInstance()
+                            profileStore.getProfile(profileKey)?.cookieManager?.removeAllCookies(null)
+                        } catch (_: Throwable) {}
+                    }
+                    Toast.makeText(this, "沙箱 Cookie 与缓存已清理", Toast.LENGTH_SHORT).show()
+                    if (::webView.isInitialized) {
+                        webView.loadUrl(targetUrl)
+                    }
+                } catch (e: Throwable) {
+                    Toast.makeText(this, "清理失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("取消", null)
+            .show()
+    }
+
+    private fun showAccountDetailsDialog() {
+        val pwdMasked = if (password.isNotBlank()) "••••••••" else "(未配置)"
+        val totpStatus = if (totpSecret.isNotBlank()) "已配置 (当前码: $currentTotpCode)" else "(未配置)"
+        val msg = "邮箱：$email\n密码：$pwdMasked\n2FA：$totpStatus\n沙箱标识：$profileKey"
+        AlertDialog.Builder(this)
+            .setTitle("账号沙箱凭据")
+            .setMessage(msg)
+            .setPositiveButton("复制密码") { _, _ ->
+                if (password.isNotBlank()) {
+                    copyToClipboard("密码", password)
+                    Toast.makeText(this, "密码已复制到剪贴板", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNeutralButton("复制 2FA") { _, _ ->
+                if (currentTotpCode.isNotBlank() && currentTotpCode != "------") {
+                    copyToClipboard("2FA 动态码", currentTotpCode)
+                    Toast.makeText(this, "2FA 动态码已复制", Toast.LENGTH_SHORT).show()
+                }
+            }
+            .setNegativeButton("关闭", null)
+            .show()
+    }
+
+    private fun closeSandboxTask() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            finishAndRemoveTask()
+        } else {
+            finish()
+        }
+    }
+
     private fun createQuickButton(
         label: String,
         bgColorHex: String,
@@ -250,7 +468,8 @@ class IsolatedBrowserActivity : Activity() {
         if (::webView.isInitialized && webView.canGoBack()) {
             webView.goBack()
         } else {
-            super.onBackPressed()
+            // 如同微信小程序，根页面按返回键时退至后台（挂起），不直接销毁
+            moveTaskToBack(true)
         }
     }
 

@@ -30,8 +30,11 @@
 
         <activity
             android:name=".IsolatedBrowserActivity"
-            android:label="Google 独立会话"
+            android:label="Google 独立沙箱"
             android:exported="false"
+            android:documentLaunchMode="intoExisting"
+            android:maxRecents="5"
+            android:taskAffinity="com.google.accountvault.sandbox"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
             android:theme="@style/Theme.IsolatedBrowser"
             android:windowSoftInputMode="adjustResize" />
