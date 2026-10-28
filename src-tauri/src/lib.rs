@@ -150,7 +150,8 @@ fn get_records(state: State<'_, AppState>) -> Result<Vec<AccountRecord>, String>
     if state.master_password.read().is_none() {
         return Err("保险库已锁定".to_string());
     }
-    Ok(state.records.read().clone())
+    let all = state.records.read();
+    Ok(all.iter().filter(|r| r.deleted_at.is_none()).cloned().collect())
 }
 
 #[tauri::command]
@@ -160,6 +161,11 @@ fn save_record(
 ) -> Result<AccountRecord, String> {
     let password_lock = state.master_password.read();
     let password = password_lock.as_ref().ok_or("保险库已锁定，无法保存")?;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
 
     if record.id.trim().is_empty() {
         record.id = uuid::Uuid::new_v4().to_string();
@@ -172,6 +178,8 @@ fn save_record(
     if record.google_one_plan.trim().is_empty() {
         record.google_one_plan = "Free".to_string();
     }
+    record.updated_at = now;
+    record.deleted_at = None;
 
     let mut records = state.records.write();
     if let Some(pos) = records.iter().position(|r| r.id == record.id) {
@@ -193,11 +201,16 @@ fn delete_record(id: String, state: State<'_, AppState>) -> Result<(), String> {
     let password_lock = state.master_password.read();
     let password = password_lock.as_ref().ok_or("保险库已锁定，无法删除")?;
 
-    let mut records = state.records.write();
-    let initial_len = records.len();
-    records.retain(|r| r.id != id);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
 
-    if records.len() != initial_len {
+    let mut records = state.records.write();
+    if let Some(pos) = records.iter().position(|r| r.id == id) {
+        records[pos].deleted_at = Some(now);
+        records[pos].updated_at = now;
+
         if let Some((key, salt)) = state.vault_key.read().as_ref() {
             vault::save_vault_atomic_with_key(&records, key, salt, 30)?;
         } else {
@@ -245,7 +258,51 @@ async fn upload_webdav_vault(
     if state.master_password.read().is_none() {
         return Err("保险库已锁定，无法上传".to_string());
     }
-    webdav::upload_vault(&config).await
+    let _ = webdav::upload_vault(&config).await?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn sync_webdav_smart(
+    state: State<'_, AppState>,
+) -> Result<webdav::SmartSyncResult, String> {
+    let password = {
+        let password_lock = state.master_password.read();
+        password_lock
+            .as_ref()
+            .cloned()
+            .ok_or("请先解锁保险库，以便同步数据")?
+    };
+
+    let mut config = match webdav::load_config()? {
+        Some(c) => c,
+        None => {
+            return Ok(webdav::SmartSyncResult {
+                synced: false,
+                message: "未配置 WebDAV 云端同步".to_string(),
+                records_updated: false,
+                records_count: 0,
+                last_sync_time: 0,
+            });
+        }
+    };
+
+    let current_records = state.records.read().clone();
+    let vault_key_copy = state.vault_key.read().clone();
+
+    let (res, new_records_opt) = webdav::smart_sync_vault(
+        &mut config,
+        &current_records,
+        &password,
+        vault_key_copy.as_ref(),
+    )
+    .await?;
+
+    if let Some(new_records) = new_records_opt {
+        *state.records.write() = new_records;
+    }
+
+    Ok(res)
 }
 
 #[tauri::command]
@@ -324,8 +381,15 @@ fn import_encrypted_vault_blob(
         return Ok(0);
     }
 
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+
     let mut records = state.records.write();
-    for r in imported {
+    for mut r in imported {
+        r.updated_at = now;
+        r.deleted_at = None;
         if let Some(pos) = records
             .iter()
             .position(|existing| existing.email.eq_ignore_ascii_case(&r.email))
@@ -353,6 +417,11 @@ fn batch_import_records(
     let password_lock = state.master_password.read();
     let password = password_lock.as_ref().ok_or("保险库已锁定，无法导入")?;
 
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+
     let mut records = state.records.write();
     let mut imported_count = 0;
 
@@ -365,11 +434,15 @@ fn batch_import_records(
         if r.id.trim().is_empty() {
             r.id = uuid::Uuid::new_v4().to_string();
         }
+        r.updated_at = now;
+        r.deleted_at = None;
         if let Some(pos) = records
             .iter()
             .position(|existing| existing.email.eq_ignore_ascii_case(&r.email))
         {
             let existing = &mut records[pos];
+            existing.updated_at = now;
+            existing.deleted_at = None;
             if !r.password.trim().is_empty() {
                 existing.password = r.password;
             }
@@ -1192,7 +1265,8 @@ pub fn run() {
             generate_custom_pwd,
             check_github_update,
             open_external_url,
-            start_auto_update
+            start_auto_update,
+            sync_webdav_smart
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

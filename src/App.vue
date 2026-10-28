@@ -57,6 +57,9 @@ interface AccountRecord {
   google_one_plan?: string;
   google_one_used?: string;
   google_one_status?: string;
+  updated_at?: number;
+  deleted_at?: number | null;
+  [key: string]: any;
 }
 
 interface TotpResult {
@@ -319,7 +322,10 @@ async function handleAuth() {
       selectedId.value = null;
     }
     startTotpTicker();
-    loadWebDavConfig();
+    await loadWebDavConfig();
+    if (webdavForm.value.auto_sync) {
+      triggerSmartSync(true);
+    }
   } catch (err: any) {
     unlockError.value = typeof err === "string" ? err : (err?.message || "解锁失败");
   } finally {
@@ -356,7 +362,10 @@ async function handleHelloUnlock() {
         selectedId.value = null;
       }
       startTotpTicker();
-      loadWebDavConfig();
+      await loadWebDavConfig();
+      if (webdavForm.value.auto_sync) {
+        triggerSmartSync(true);
+      }
     } else {
       records.value = await invoke<AccountRecord[]>("unlock_vault_with_hello");
       isUnlocked.value = true;
@@ -366,7 +375,10 @@ async function handleHelloUnlock() {
         selectedId.value = null;
       }
       startTotpTicker();
-      loadWebDavConfig();
+      await loadWebDavConfig();
+      if (webdavForm.value.auto_sync) {
+        triggerSmartSync(true);
+      }
     }
   } catch (err: any) {
     const defaultMsg = isMobilePlatform.value ? "手机安全验证未通过" : "Windows Hello 验证未通过";
@@ -556,6 +568,7 @@ async function handleSaveRecord() {
     isEditing.value = false;
     updateAllTotp();
     notify("账号信息已成功加密保存", "success");
+    triggerDebouncedSync();
   } catch (err: any) {
     notify("保存失败: " + err, "error");
   } finally {
@@ -580,6 +593,7 @@ async function handleDeleteRecord(id: string) {
       mobileView.value = "list";
     }
     notify("账号记录已安全删除", "info");
+    triggerDebouncedSync();
   } catch (err: any) {
     notify("删除失败: " + err, "error");
   }
@@ -683,6 +697,7 @@ async function toggleBackupCode(code: string) {
   }
   selectedRecord.value.used_backup_codes = JSON.stringify(Array.from(currentSet));
   await invoke("save_record", { record: selectedRecord.value });
+  triggerDebouncedSync();
 }
 
 async function copyAndConsumeNextBackupCode() {
@@ -700,6 +715,7 @@ async function copyAndConsumeNextBackupCode() {
   await invoke("save_record", { record: selectedRecord.value });
   copiedField.value = "backup_code_consumed";
   notify(`⚡ 已复制未用码 [${next}] 并自动完成核销`, "success", 3000);
+  triggerDebouncedSync();
   setTimeout(() => {
     if (copiedField.value === "backup_code_consumed") copiedField.value = null;
   }, 2500);
@@ -722,6 +738,7 @@ async function saveRawBackupCodes() {
   await invoke("save_record", { record: selectedRecord.value });
   isEditingBackupCodesRaw.value = false;
   notify(`成功更新 ${codes.length} 个备用验证码`, "success");
+  triggerDebouncedSync();
 }
 
 async function resetAllUsedCodes() {
@@ -737,6 +754,7 @@ async function resetAllUsedCodes() {
   selectedRecord.value.used_backup_codes = "[]";
   await invoke("save_record", { record: selectedRecord.value });
   notify("所有备用验证码状态已全部重置为未用", "info");
+  triggerDebouncedSync();
 }
 
 // ==================== 2. BATCH IMPORT & SMART PARSER ====================
@@ -858,15 +876,49 @@ async function confirmBatchImport() {
       selectedId.value = records.value[0].id;
     }
     updateAllTotp();
+    triggerDebouncedSync();
   } catch (err: any) {
     notify("批量导入失败: " + err, "error");
   }
 }
 
 // ==================== 3. WEBDAV CLOUD SYNC ====================
-const webdavForm = ref({ url: "", username: "", password: "" });
+interface SmartSyncResult {
+  synced: boolean;
+  message: string;
+  records_updated: boolean;
+  records_count: number;
+  last_sync_time: number;
+}
+
+type SyncState = "idle" | "syncing" | "success" | "error";
+
+const webdavForm = ref({
+  url: "",
+  username: "",
+  password: "",
+  auto_sync: true,
+  last_sync_time: null as number | null,
+  last_etag: null as string | null
+});
 const webdavStatus = ref("");
 const isWebDavSyncing = ref(false);
+const syncState = ref<SyncState>("idle");
+const syncTooltip = ref<string>("WebDAV 云端同步就绪");
+
+const lastSyncTimeFormatted = computed(() => {
+  if (!webdavForm.value.last_sync_time) return "从未同步";
+  const d = new Date(webdavForm.value.last_sync_time);
+  const now = new Date();
+  const diffSec = Math.floor((now.getTime() - d.getTime()) / 1000);
+  if (diffSec < 60) return "刚刚";
+  if (diffSec < 3600) return `${Math.floor(diffSec / 60)} 分钟前`;
+  const month = d.getMonth() + 1;
+  const day = d.getDate();
+  const hours = String(d.getHours()).padStart(2, "0");
+  const mins = String(d.getMinutes()).padStart(2, "0");
+  return `${month}/${day} ${hours}:${mins}`;
+});
 
 async function loadWebDavConfig() {
   try {
@@ -875,7 +927,10 @@ async function loadWebDavConfig() {
       webdavForm.value = {
         url: saved.url || "",
         username: saved.username || "",
-        password: saved.password || ""
+        password: saved.password || "",
+        auto_sync: saved.auto_sync !== false,
+        last_sync_time: saved.last_sync_time || null,
+        last_etag: saved.last_etag || null
       };
       try {
         localStorage.setItem("gvault_webdav_config", JSON.stringify(webdavForm.value));
@@ -895,7 +950,10 @@ async function loadWebDavConfig() {
         webdavForm.value = {
           url: parsed.url || "",
           username: parsed.username || "",
-          password: parsed.password || ""
+          password: parsed.password || "",
+          auto_sync: parsed.auto_sync !== false,
+          last_sync_time: parsed.last_sync_time || null,
+          last_etag: parsed.last_etag || null
         };
       }
     }
@@ -916,6 +974,80 @@ async function handleSaveWebDavConfig(notifyUser = true) {
     webdavStatus.value = "❌ 保存失败: " + err;
     if (notifyUser) notify("保存 WebDAV 配置失败: " + err, "error");
   }
+}
+
+let isSyncingSmart = false;
+let debouncedSyncTimer: any = null;
+
+async function triggerSmartSync(silent = false) {
+  if (isSyncingSmart) return;
+  if (!webdavForm.value.url.trim() || !webdavForm.value.username.trim() || !webdavForm.value.password.trim()) {
+    syncState.value = "idle";
+    syncTooltip.value = "未配置 WebDAV 云端同步";
+    if (!silent) {
+      notify("请先在「设置 -> WebDAV 云端同步」中配置服务器地址与密码", "warning");
+    }
+    return;
+  }
+  if (silent && !webdavForm.value.auto_sync) {
+    return;
+  }
+
+  isSyncingSmart = true;
+  isWebDavSyncing.value = true;
+  syncState.value = "syncing";
+  syncTooltip.value = "正在智能检测并同步云端数据...";
+
+  try {
+    const res = await invoke<SmartSyncResult>("sync_webdav_smart");
+    if (res.synced) {
+      syncState.value = "success";
+      webdavForm.value.last_sync_time = res.last_sync_time;
+      syncTooltip.value = res.message;
+      if (res.records_updated) {
+        records.value = await invoke<AccountRecord[]>("get_records");
+        updateAllTotp();
+        if (!silent) {
+          notify(`🎉 ${res.message} (当前共 ${res.records_count} 个有效账号)`, "success", 3000);
+        }
+      } else if (!silent) {
+        notify(res.message, "success", 2500);
+      }
+    } else {
+      syncState.value = "idle";
+      syncTooltip.value = res.message;
+      if (!silent) {
+        notify(res.message, "info", 2500);
+      }
+    }
+  } catch (err: any) {
+    console.warn("Smart sync error:", err);
+    syncState.value = "error";
+    const errStr = typeof err === "string" ? err : (err?.message || "网络请求异常");
+    syncTooltip.value = `同步失败: ${errStr}`;
+    if (!silent) {
+      notify(`云同步失败: ${errStr}`, "error", 4000);
+    }
+  } finally {
+    isSyncingSmart = false;
+    isWebDavSyncing.value = false;
+    if (syncState.value === "success") {
+      setTimeout(() => {
+        if (syncState.value === "success") {
+          syncState.value = "idle";
+          syncTooltip.value = `云端同步正常 (上次: ${lastSyncTimeFormatted.value})`;
+        }
+      }, 3500);
+    }
+  }
+}
+
+function triggerDebouncedSync() {
+  if (!webdavForm.value.auto_sync || !webdavForm.value.url.trim()) return;
+  if (debouncedSyncTimer) clearTimeout(debouncedSyncTimer);
+  debouncedSyncTimer = setTimeout(() => {
+    triggerSmartSync(true);
+  }, 1500);
 }
 
 // ==================== SETTINGS & GITHUB UPDATE ====================
@@ -1314,6 +1446,7 @@ async function handleImportGvaultBlob(blob: string, fileName: string) {
     records.value = await invoke<AccountRecord[]>("get_records");
     updateAllTotp();
     notify(`🎉 成功从密文文件导入并更新了 ${count} 条账号记录！`, "success", 4000);
+    triggerDebouncedSync();
   } catch (err: any) {
     notify("导入密文保险库失败（请核对主密码是否一致）: " + err, "error", 6000);
   }
@@ -1403,6 +1536,7 @@ function applyPasswordToCurrentRecord() {
   invoke("save_record", { record: selectedRecord.value });
   showPasswordGenModal.value = false;
   notify(`已将生成的新密码更新至账号 [${selectedRecord.value.email}]`, "success", 3000);
+  triggerDebouncedSync();
 }
 
 const passwordStrength = computed(() => {
@@ -1536,6 +1670,14 @@ async function setupBackNavigation() {
   }
 }
 
+function handleWindowFocus() {
+  if (isUnlocked.value && webdavForm.value.auto_sync) {
+    triggerSmartSync(true);
+  }
+}
+
+let syncIntervalTimer: any = null;
+
 // Lifecycle Hooks
 onMounted(async () => {
   try {
@@ -1548,8 +1690,15 @@ onMounted(async () => {
   await loadWebDavConfig();
   if (typeof window !== "undefined") {
     window.addEventListener("resize", updateWindowWidth);
+    window.addEventListener("focus", handleWindowFocus);
     updateWindowWidth();
   }
+
+  syncIntervalTimer = setInterval(() => {
+    if (isUnlocked.value && webdavForm.value.auto_sync) {
+      triggerSmartSync(true);
+    }
+  }, 10 * 60 * 1000);
 
   try {
     unlistenUpdateProgress = await listen<{ downloaded: number; total: number; percent: number }>(
@@ -1572,9 +1721,12 @@ onMounted(async () => {
 
 onUnmounted(() => {
   if (totpTimer) clearInterval(totpTimer);
+  if (syncIntervalTimer) clearInterval(syncIntervalTimer);
+  if (debouncedSyncTimer) clearTimeout(debouncedSyncTimer);
   if (typeof window !== "undefined") {
     window.removeEventListener("keydown", handleKeyDown);
     window.removeEventListener("resize", updateWindowWidth);
+    window.removeEventListener("focus", handleWindowFocus);
   }
   if (backButtonListener) {
     backButtonListener.unregister().catch(() => {});
@@ -1717,6 +1869,39 @@ onUnmounted(() => {
             <span>批量导入</span>
           </button>
 
+          <!-- Cloud Smart Sync Indicator & Button -->
+          <button
+            @click="triggerSmartSync(false)"
+            :disabled="syncState === 'syncing'"
+            class="h-9 px-3 bg-[#f1f3f4] hover:bg-[#e8eaed] text-[#3c4043] rounded-full text-xs font-medium flex items-center gap-1.5 transition-all relative cursor-pointer disabled:opacity-75"
+            :title="`WebDAV 增量智能同步: ${syncTooltip} (点击立即执行同步)`"
+          >
+            <RefreshCw
+              v-if="syncState === 'syncing'"
+              class="w-3.5 h-3.5 text-[#1a73e8] animate-spin"
+            />
+            <Cloud
+              v-else
+              :class="[
+                'w-3.5 h-3.5',
+                syncState === 'error' ? 'text-rose-500' :
+                syncState === 'success' ? 'text-emerald-500' :
+                webdavForm.url ? 'text-[#1a73e8]' : 'text-[#80868b]'
+              ]"
+            />
+            <span>{{ syncState === 'syncing' ? '同步中' : syncState === 'error' ? '同步失败' : '云同步' }}</span>
+            <span
+              v-if="webdavForm.url && webdavForm.auto_sync"
+              :class="[
+                'w-1.5 h-1.5 rounded-full absolute top-2 right-2',
+                syncState === 'syncing' ? 'bg-[#1a73e8] animate-ping' :
+                syncState === 'error' ? 'bg-rose-500' :
+                'bg-emerald-500'
+              ]"
+              :title="syncTooltip"
+            ></span>
+          </button>
+
           <!-- Unified Settings Button -->
           <button
             @click="openSettingsModal('security')"
@@ -1773,6 +1958,37 @@ onUnmounted(() => {
               <span>添加</span>
             </button>
 
+            <!-- Mobile Cloud Sync Button -->
+            <button
+              @click="triggerSmartSync(false)"
+              :disabled="syncState === 'syncing'"
+              class="w-8 h-8 rounded-full flex items-center justify-center text-[#5f6368] hover:bg-[#f1f3f4] active:bg-[#e8eaed] transition-colors relative cursor-pointer disabled:opacity-75"
+              :title="`WebDAV 云端同步: ${syncTooltip} (点击同步)`"
+            >
+              <RefreshCw
+                v-if="syncState === 'syncing'"
+                class="w-4 h-4 text-[#1a73e8] animate-spin"
+              />
+              <Cloud
+                v-else
+                :class="[
+                  'w-4 h-4',
+                  syncState === 'error' ? 'text-rose-500' :
+                  syncState === 'success' ? 'text-emerald-500' :
+                  webdavForm.url ? 'text-[#1a73e8]' : 'text-[#80868b]'
+                ]"
+              />
+              <span
+                v-if="webdavForm.url && webdavForm.auto_sync"
+                :class="[
+                  'w-1.5 h-1.5 rounded-full absolute top-1.5 right-1.5',
+                  syncState === 'syncing' ? 'bg-[#1a73e8] animate-ping' :
+                  syncState === 'error' ? 'bg-rose-500' :
+                  'bg-emerald-500'
+                ]"
+              ></span>
+            </button>
+
             <!-- Settings Button -->
             <button
               @click="openSettingsModal('security')"
@@ -1798,6 +2014,13 @@ onUnmounted(() => {
                 v-if="showMobileMoreMenu"
                 class="absolute right-0 top-10 w-44 bg-white rounded-2xl shadow-xl border border-[#dadce0] p-1.5 z-50 text-xs font-medium space-y-0.5 animate-fade-in"
               >
+                <button
+                  @click="showMobileMoreMenu = false; triggerSmartSync(false)"
+                  class="w-full px-3 py-2 text-left hover:bg-[#f1f3f4] rounded-xl flex items-center gap-2 text-[#3c4043] cursor-pointer"
+                >
+                  <Cloud class="w-3.5 h-3.5 text-[#1a73e8]" />
+                  <span>立即智能同步</span>
+                </button>
                 <button
                   @click="showMobileMoreMenu = false; openPasswordGenModal()"
                   class="w-full px-3 py-2 text-left hover:bg-[#f1f3f4] rounded-xl flex items-center gap-2 text-[#3c4043] cursor-pointer"
@@ -3002,6 +3225,82 @@ onUnmounted(() => {
 
           <!-- TAB 2: WEBDAV CLOUD SYNC -->
           <div v-else-if="settingsTab === 'webdav'" class="space-y-4">
+            <!-- 1. Full-Auto Smart Sync Engine Control -->
+            <div class="p-3.5 sm:p-4 bg-[#f8fafd] rounded-2xl border border-[#dadce0] space-y-3">
+              <div class="flex items-center justify-between gap-2 pb-2 border-b border-[#dadce0]/60">
+                <div class="flex items-center gap-2">
+                  <Zap class="w-4 h-4 text-[#1a73e8] flex-shrink-0" />
+                  <span class="text-xs font-bold text-[#202124]">全自动增量智能同步 (Zero-Touch & Smart Merge)</span>
+                </div>
+                <!-- Auto Sync Toggle Switch -->
+                <button
+                  type="button"
+                  @click="webdavForm.auto_sync = !webdavForm.auto_sync; handleSaveWebDavConfig(false)"
+                  :class="[
+                    'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none',
+                    webdavForm.auto_sync ? 'bg-[#1a73e8]' : 'bg-[#dadce0]'
+                  ]"
+                  role="switch"
+                  :aria-checked="webdavForm.auto_sync"
+                >
+                  <span
+                    :class="[
+                      'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                      webdavForm.auto_sync ? 'translate-x-5' : 'translate-x-0'
+                    ]"
+                  />
+                </button>
+              </div>
+
+              <p class="text-[11px] text-[#5f6368] leading-relaxed">
+                启用后，本地<b>新增、修改、核销备用码或删除账号</b>将在 <b>1.5 秒</b>内自动静默推送到云端；启动应用或前台唤醒时利用轻量 <b>ETag</b> 极速拉取增量；通过毫秒级修改时间戳与逻辑删除墓碑进行冲突仲裁，<b>多设备互相同步零覆盖风险</b>。
+              </p>
+
+              <!-- Sync Status Summary Grid -->
+              <div class="grid grid-cols-2 sm:grid-cols-3 gap-2 py-1">
+                <div class="p-2.5 bg-white rounded-xl border border-[#dadce0]/70 flex flex-col gap-0.5">
+                  <span class="text-[10px] text-[#80868b] font-medium">上次同步时间</span>
+                  <span class="text-xs font-semibold text-[#202124] truncate">{{ lastSyncTimeFormatted }}</span>
+                </div>
+                <div class="p-2.5 bg-white rounded-xl border border-[#dadce0]/70 flex flex-col gap-0.5">
+                  <span class="text-[10px] text-[#80868b] font-medium">同步引擎状态</span>
+                  <div class="flex items-center gap-1.5">
+                    <span
+                      :class="[
+                        'w-1.5 h-1.5 rounded-full flex-shrink-0',
+                        syncState === 'syncing' ? 'bg-[#1a73e8] animate-ping' :
+                        syncState === 'error' ? 'bg-rose-500' :
+                        webdavForm.auto_sync ? 'bg-emerald-500' : 'bg-gray-400'
+                      ]"
+                    ></span>
+                    <span class="text-xs font-semibold text-[#202124] truncate">
+                      {{ syncState === 'syncing' ? '正在同步...' : syncState === 'error' ? '同步异常' : webdavForm.auto_sync ? '全自动监控中' : '自动同步已暂停' }}
+                    </span>
+                  </div>
+                </div>
+                <div class="col-span-2 sm:col-span-1 p-2.5 bg-white rounded-xl border border-[#dadce0]/70 flex flex-col gap-0.5">
+                  <span class="text-[10px] text-[#80868b] font-medium">云端文件版本</span>
+                  <span class="text-xs font-mono font-medium text-[#5f6368] truncate" :title="webdavForm.last_etag || '未获取'">
+                    {{ webdavForm.last_etag ? webdavForm.last_etag.slice(0, 12) + '...' : '尚未生成' }}
+                  </span>
+                </div>
+              </div>
+
+              <!-- Manual Trigger Smart Sync Button -->
+              <div class="pt-1">
+                <button
+                  type="button"
+                  @click="triggerSmartSync(false)"
+                  :disabled="isWebDavSyncing"
+                  class="w-full py-2.5 px-3 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium flex items-center justify-center gap-2 shadow-sm transition-all disabled:opacity-50 cursor-pointer"
+                >
+                  <RefreshCw :class="['w-3.5 h-3.5', isWebDavSyncing ? 'animate-spin' : '']" />
+                  <span>⚡ 立即执行全自动增量智能合并</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- 2. Server Connection Config -->
             <div class="p-3.5 sm:p-4 bg-[#f8fafd] rounded-2xl border border-[#dadce0] space-y-3">
               <div class="flex flex-col sm:flex-row sm:items-center gap-1.5 pb-2 border-b border-[#dadce0]/60">
                 <div class="flex items-center gap-2">
@@ -3072,31 +3371,31 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <!-- Sync Actions -->
+            <!-- 3. Manual Cold-Backup / Fallback Actions -->
             <div class="p-3.5 sm:p-4 bg-[#f8fafd] rounded-2xl border border-[#dadce0] space-y-3">
-              <h3 class="text-xs font-bold text-[#202124]">云端数据流转与同步操作</h3>
+              <h3 class="text-xs font-bold text-[#202124]">手动冷备份与恢复覆盖（备用降级操作）</h3>
               <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <button
                   type="button"
                   @click="handleUploadWebDav"
                   :disabled="isWebDavSyncing"
-                  class="py-2.5 px-3 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 shadow-sm transition-all disabled:opacity-50 cursor-pointer"
+                  class="py-2.5 px-3 bg-white hover:bg-[#f1f3f4] text-[#3c4043] border border-[#dadce0] rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 transition-all disabled:opacity-50 cursor-pointer"
                 >
                   <Upload class="w-3.5 h-3.5 flex-shrink-0" />
-                  <span>⬆ 上传备份至云端 (密文)</span>
+                  <span>⬆ 全库强制覆盖上传至云端</span>
                 </button>
                 <button
                   type="button"
                   @click="handleDownloadWebDav"
                   :disabled="isWebDavSyncing"
-                  class="py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 shadow-sm transition-all disabled:opacity-50 cursor-pointer"
+                  class="py-2.5 px-3 bg-white hover:bg-[#f1f3f4] text-[#3c4043] border border-[#dadce0] rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 transition-all disabled:opacity-50 cursor-pointer"
                 >
                   <Download class="w-3.5 h-3.5 flex-shrink-0" />
-                  <span>⬇ 从云端恢复覆盖本地</span>
+                  <span>⬇ 从云端下载强制覆盖本地</span>
                 </button>
               </div>
               <p class="text-[11px] text-[#80868b] leading-relaxed">
-                提示：上传至云端的完全是经过 AES-256-GCM 强加密的密文，即使网盘服务商也绝无法窥探账号明文信息。从云端恢复覆盖时会自动先对本地数据创建安全快照。
+                提示：正常情况下使用上方的「全自动增量智能同步」即可；此处的强制覆盖操作用于整库灾难恢复或冷初始化。执行强制覆盖前系统均会自动为本地数据创建安全快照。
               </p>
             </div>
           </div>
