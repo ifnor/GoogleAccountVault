@@ -618,6 +618,7 @@ async function openInApp(url: string) {
       email: selectedRecord.value.email,
       password: selectedRecord.value.password || "",
       totpSecret: selectedRecord.value.totp || "",
+      recoveryEmail: selectedRecord.value.recovery_email || "",
       url
     });
   } catch (err: any) {

@@ -463,6 +463,7 @@ async fn open_in_app_browser(
     email: String,
     password: Option<String>,
     totp_secret: Option<String>,
+    recovery_email: Option<String>,
     url: String,
 ) -> Result<(), String> {
     let clean_email = email.trim().to_lowercase();
@@ -474,6 +475,9 @@ async fn open_in_app_browser(
     let safe_email_json = serde_json::to_string(&email).unwrap_or_else(|_| "\"\"".to_string());
     let safe_pwd_json = serde_json::to_string(&password.as_deref().unwrap_or_default())
         .unwrap_or_else(|_| "\"\"".to_string());
+    let safe_rec_email_json =
+        serde_json::to_string(&recovery_email.as_deref().unwrap_or_default())
+            .unwrap_or_else(|_| "\"\"".to_string());
     let current_totp = totp_secret
         .as_ref()
         .and_then(|s| totp::calculate_totp(s).ok())
@@ -488,9 +492,11 @@ async fn open_in_app_browser(
             const targetEmail = {safe_email_json};
             const targetPassword = {safe_pwd_json};
             const targetTotp = {safe_totp_json};
+            const targetRecEmail = {safe_rec_email_json};
             let emailFilled = false;
             let pwdFilled = false;
             let totpFilled = false;
+            let recEmailFilled = false;
 
             function autoFill() {{
                 if (!window.location.hostname.includes("google.com")) return;
@@ -542,6 +548,23 @@ async fn open_in_app_browser(
                         totpFilled = true;
                     }}
                 }}
+
+                // 4. Fill Recovery Email if present
+                if (targetRecEmail && !recEmailFilled) {{
+                    const recInput = document.getElementById("knowledge-preregistered-email-response") ||
+                                     document.querySelector('input[name="knowledgePreregisteredEmailResponse"]') ||
+                                     document.querySelector('input[type="email"][aria-label*="辅助"]') ||
+                                     document.querySelector('input[type="email"][aria-label*="recovery"]');
+                    if (recInput) {{
+                        if (recInput.value !== targetRecEmail) {{
+                            recInput.focus();
+                            recInput.value = targetRecEmail;
+                            recInput.dispatchEvent(new Event("input", {{ bubbles: true }}));
+                            recInput.dispatchEvent(new Event("change", {{ bubbles: true }}));
+                        }}
+                        recEmailFilled = true;
+                    }}
+                }}
             }}
 
             window.addEventListener("DOMContentLoaded", autoFill);
@@ -565,6 +588,7 @@ async fn open_in_app_browser(
             safe_label,
             safe_email_json,
             safe_pwd_json,
+            safe_rec_email_json,
             current_totp,
             safe_totp_json,
             autofill_script,
@@ -595,19 +619,23 @@ async fn open_in_app_browser(
         let totp_j = env
             .new_string(totp_secret.unwrap_or_default())
             .map_err(|e| e.to_string())?;
+        let rec_email_j = env
+            .new_string(recovery_email.unwrap_or_default())
+            .map_err(|e| e.to_string())?;
 
         let class_res = find_app_class(&mut env, &context_obj, "com/google/accountvault/MainActivity");
         let opened = if let Ok(class) = class_res {
             let res = env.call_static_method(
                 class,
                 "openIsolatedBrowser",
-                "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Z",
+                "(Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Z",
                 &[
                     jni::objects::JValue::from(&context_obj),
                     jni::objects::JValue::from(&email_j),
                     jni::objects::JValue::from(&url_j),
                     jni::objects::JValue::from(&pwd_j),
                     jni::objects::JValue::from(&totp_j),
+                    jni::objects::JValue::from(&rec_email_j),
                 ],
             );
             match res {

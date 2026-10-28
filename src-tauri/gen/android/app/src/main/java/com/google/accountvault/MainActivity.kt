@@ -87,7 +87,8 @@ class MainActivity : TauriActivity() {
       email: String,
       url: String,
       password: String,
-      totpSecret: String
+      totpSecret: String,
+      recoveryEmail: String = ""
     ): Boolean {
       val targetContext = instance ?: context
       return try {
@@ -97,6 +98,7 @@ class MainActivity : TauriActivity() {
           putExtra("url", url)
           putExtra("password", password)
           putExtra("totpSecret", totpSecret)
+          putExtra("recoveryEmail", recoveryEmail)
           // 独立并发文档任务栈标记（微信小程序式独立多任务）
           addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT)
           addFlags(Intent.FLAG_ACTIVITY_MULTIPLE_TASK)

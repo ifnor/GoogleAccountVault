@@ -16,6 +16,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.*
@@ -31,14 +32,22 @@ class IsolatedBrowserActivity : Activity() {
 
     private lateinit var webView: WebView
     private lateinit var progressBar: ProgressBar
-    private lateinit var totpButton: TextView
     private var email: String = ""
     private var targetUrl: String = ""
     private var password: String = ""
     private var totpSecret: String = ""
+    private var recoveryEmail: String = ""
     private var currentTotpCode: String = ""
     private var profileKey: String = ""
     private var isDesktopMode: Boolean = false
+
+    // Floating Pill states
+    private var showFloatingPill: Boolean = true
+    private lateinit var floatingPillContainer: FrameLayout
+    private lateinit var floatingCollapsedView: LinearLayout
+    private lateinit var floatingExpandedView: LinearLayout
+    private lateinit var floatingSummaryText: TextView
+    private var autoCollapseRunnable: Runnable? = null
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var totpRunnable: Runnable? = null
@@ -50,10 +59,15 @@ class IsolatedBrowserActivity : Activity() {
             targetUrl = intent.getStringExtra("url") ?: "https://accounts.google.com/"
             password = intent.getStringExtra("password") ?: ""
             totpSecret = intent.getStringExtra("totpSecret") ?: ""
+            recoveryEmail = intent.getStringExtra("recoveryEmail") ?: ""
 
             val rawHash = Math.abs(email.trim().lowercase().hashCode()).toString(16)
             profileKey = "vault_$rawHash"
 
+            // 1. Edge-to-Edge System Status & Navigation Bar setup
+            setupSystemBars()
+
+            // 2. Custom Task Description for Multitasking Overview
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 val taskTitle = if (email.isNotBlank()) "Google · $email" else "Google 独立沙箱"
                 val taskDesc = ActivityManager.TaskDescription(
@@ -81,6 +95,21 @@ class IsolatedBrowserActivity : Activity() {
         }
     }
 
+    private fun setupSystemBars() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            window.decorView.systemUiVisibility =
+                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+        }
+        window.statusBarColor = Color.TRANSPARENT
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            window.decorView.systemUiVisibility =
+                window.decorView.systemUiVisibility or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+            window.navigationBarColor = Color.parseColor("#F8FAFD")
+        }
+    }
+
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -90,6 +119,8 @@ class IsolatedBrowserActivity : Activity() {
         if (!newPwd.isNullOrBlank()) password = newPwd
         val newTotp = intent?.getStringExtra("totpSecret")
         if (!newTotp.isNullOrBlank()) totpSecret = newTotp
+        val newRec = intent?.getStringExtra("recoveryEmail")
+        if (!newRec.isNullOrBlank()) recoveryEmail = newRec
 
         val newUrl = intent?.getStringExtra("url")
         if (!newUrl.isNullOrBlank() && newUrl != targetUrl) {
@@ -119,11 +150,11 @@ class IsolatedBrowserActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                dpToPx(52)
+                ViewGroup.LayoutParams.WRAP_CONTENT
             )
             gravity = Gravity.CENTER_VERTICAL
             setBackgroundColor(Color.parseColor("#F8FAFD"))
-            setPadding(dpToPx(8), 0, dpToPx(8), 0)
+            setPadding(dpToPx(8), dpToPx(8), dpToPx(8), dpToPx(8))
         }
 
         // 1.1 Left: Back to Main App Button (返回管家本体)
@@ -266,60 +297,253 @@ class IsolatedBrowserActivity : Activity() {
         }
         rootLayout.addView(progressBar)
 
-        // ================= 3. Main WebView =================
-        webView = WebView(this).apply {
+        // ================= 3. Main Content Container (FrameLayout for 100% Fullscreen WebView + Floating Pill) =================
+        val contentContainer = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 0,
                 1f
             )
         }
-        rootLayout.addView(webView)
 
-        // ================= 4. Bottom Quick Autofill Toolbar =================
-        val bottomBar = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(
+        webView = WebView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
-                dpToPx(52)
+                ViewGroup.LayoutParams.MATCH_PARENT
             )
-            gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(Color.WHITE)
-            elevation = dpToPx(6).toFloat()
-            setPadding(dpToPx(8), dpToPx(6), dpToPx(8), dpToPx(6))
         }
+        contentContainer.addView(webView)
 
-        // Button 1: Fill Email
-        val emailBtn = createQuickButton("📧 填邮箱", "#F1F3F4", "#3C4043", 1f) {
-            fillEmailManually()
+        // ================= 4. Setup Collapsible Floating Pill =================
+        setupFloatingPill(contentContainer)
+
+        rootLayout.addView(contentContainer)
+
+        // ================= 5. WindowInsets (Status Bar & Bottom Gesture Bar Padding) =================
+        rootLayout.setOnApplyWindowInsetsListener { _, insets ->
+            val statusTop = insets.systemWindowInsetTop
+            val navBottom = insets.systemWindowInsetBottom
+            topBar.setPadding(dpToPx(8), statusTop + dpToPx(4), dpToPx(8), dpToPx(4))
+            contentContainer.setPadding(0, 0, 0, navBottom)
+            insets
         }
-        bottomBar.addView(emailBtn)
-
-        // Button 2: Fill Password
-        val pwdBtn = createQuickButton("🔑 填密码", "#F1F3F4", "#3C4043", 1f) {
-            fillPasswordManually()
-        }
-        bottomBar.addView(pwdBtn)
-
-        // Button 3: Fill TOTP
-        totpButton = createQuickButton("⏱️ 2FA", "#E8F0FE", "#1A73E8", 1.25f) {
-            fillTotpManually()
-        }
-        bottomBar.addView(totpButton)
-
-        rootLayout.addView(bottomBar)
 
         setContentView(rootLayout)
+    }
+
+    private fun setupFloatingPill(container: FrameLayout) {
+        floatingPillContainer = FrameLayout(this).apply {
+            val lp = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                gravity = Gravity.BOTTOM or Gravity.END
+                marginEnd = dpToPx(8)
+                bottomMargin = dpToPx(70)
+            }
+            layoutParams = lp
+            elevation = dpToPx(8).toFloat()
+        }
+
+        // 1. Collapsed View (默认小巧贴边药丸)
+        floatingCollapsedView = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dpToPx(12), dpToPx(7), dpToPx(12), dpToPx(7))
+            val bg = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dpToPx(18).toFloat()
+                setColor(Color.WHITE)
+                setStroke(dpToPx(1), Color.parseColor("#DADCE0"))
+            }
+            background = bg
+            setOnClickListener {
+                expandFloatingPill()
+            }
+        }
+
+        floatingSummaryText = TextView(this).apply {
+            text = "⏱️ 凭据"
+            textSize = 12f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor("#1A73E8"))
+        }
+        floatingCollapsedView.addView(floatingSummaryText)
+        floatingPillContainer.addView(floatingCollapsedView)
+
+        // 2. Expanded View (展开横向快捷条)
+        floatingExpandedView = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dpToPx(6), dpToPx(4), dpToPx(6), dpToPx(4))
+            val bg = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = dpToPx(18).toFloat()
+                setColor(Color.parseColor("#F8FAFD"))
+                setStroke(dpToPx(1), Color.parseColor("#1A73E8"))
+            }
+            background = bg
+            visibility = View.GONE
+        }
+
+        // 2.1 填邮箱
+        val fEmailBtn = createMiniPillButton("📧 邮箱", "#FFFFFF", "#3C4043") {
+            fillEmailManually()
+            scheduleAutoCollapse()
+        }
+        floatingExpandedView.addView(fEmailBtn)
+
+        // 2.2 填密码
+        val fPwdBtn = createMiniPillButton("🔑 密码", "#FFFFFF", "#3C4043") {
+            fillPasswordManually()
+            scheduleAutoCollapse()
+        }
+        floatingExpandedView.addView(fPwdBtn)
+
+        // 2.3 填辅助邮箱
+        val fRecBtn = createMiniPillButton("🛡️ 辅助", "#FFFFFF", "#188038") {
+            fillRecoveryEmailManually()
+            scheduleAutoCollapse()
+        }
+        floatingExpandedView.addView(fRecBtn)
+
+        // 2.4 填 2FA
+        val fTotpBtn = createMiniPillButton("⏱️ 2FA", "#E8F0FE", "#1A73E8") {
+            fillTotpManually()
+            scheduleAutoCollapse()
+        }
+        floatingExpandedView.addView(fTotpBtn)
+
+        // 2.5 收起按钮 (›)
+        val fCloseBtn = TextView(this).apply {
+            text = "›"
+            textSize = 18f
+            setTextColor(Color.parseColor("#5F6368"))
+            gravity = Gravity.CENTER
+            setPadding(dpToPx(6), 0, dpToPx(4), 0)
+            setOnClickListener {
+                collapseFloatingPill()
+            }
+        }
+        floatingExpandedView.addView(fCloseBtn)
+
+        floatingPillContainer.addView(floatingExpandedView)
+        container.addView(floatingPillContainer)
+
+        setupFloatingDrag()
+    }
+
+    private fun createMiniPillButton(
+        label: String,
+        bgColorHex: String,
+        textColorHex: String,
+        onClick: () -> Unit
+    ): TextView {
+        val bg = GradientDrawable().apply {
+            shape = GradientDrawable.RECTANGLE
+            cornerRadius = dpToPx(12).toFloat()
+            setColor(Color.parseColor(bgColorHex))
+            setStroke(dpToPx(1), Color.parseColor("#DADCE0"))
+        }
+        return TextView(this).apply {
+            text = label
+            textSize = 11.5f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Color.parseColor(textColorHex))
+            gravity = Gravity.CENTER
+            background = bg
+            setPadding(dpToPx(8), dpToPx(5), dpToPx(8), dpToPx(5))
+            val lp = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply {
+                marginStart = dpToPx(2)
+                marginEnd = dpToPx(2)
+            }
+            layoutParams = lp
+            setOnClickListener { onClick() }
+        }
+    }
+
+    private fun expandFloatingPill() {
+        floatingCollapsedView.visibility = View.GONE
+        floatingExpandedView.visibility = View.VISIBLE
+        scheduleAutoCollapse()
+    }
+
+    private fun collapseFloatingPill() {
+        autoCollapseRunnable?.let { mainHandler.removeCallbacks(it) }
+        floatingExpandedView.visibility = View.GONE
+        floatingCollapsedView.visibility = View.VISIBLE
+    }
+
+    private fun scheduleAutoCollapse() {
+        autoCollapseRunnable?.let { mainHandler.removeCallbacks(it) }
+        autoCollapseRunnable = Runnable {
+            collapseFloatingPill()
+        }
+        mainHandler.postDelayed(autoCollapseRunnable!!, 5000)
+    }
+
+    private var dY = 0f
+    private fun setupFloatingDrag() {
+        var startY = 0f
+        floatingCollapsedView.setOnTouchListener { _, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    startY = event.rawY
+                    dY = floatingPillContainer.y - event.rawY
+                    false
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val delta = Math.abs(event.rawY - startY)
+                    if (delta > dpToPx(6)) {
+                        val newY = event.rawY + dY
+                        val parent = floatingPillContainer.parent as? View
+                        if (parent != null) {
+                            val maxY = parent.height - floatingPillContainer.height - dpToPx(10)
+                            val minY = dpToPx(10).toFloat()
+                            floatingPillContainer.y = newY.coerceIn(minY, maxY.toFloat())
+                        }
+                        true
+                    } else {
+                        false
+                    }
+                }
+                else -> false
+            }
+        }
+    }
+
+    private fun updateFloatingPillText(remaining: Int = 30) {
+        if (!::floatingSummaryText.isInitialized) return
+        if (currentTotpCode.isNotBlank() && currentTotpCode != "------") {
+            floatingSummaryText.text = "⏱️ $currentTotpCode (${remaining}s)"
+        } else if (recoveryEmail.isNotBlank()) {
+            floatingSummaryText.text = "🛡️ 辅助凭据"
+        } else {
+            floatingSummaryText.text = "🔑 快捷凭据"
+        }
     }
 
     private fun showCapsuleMenu() {
         val current = if (::webView.isInitialized) (webView.url ?: targetUrl) else targetUrl
         val modeLabel = if (isDesktopMode) "📱 切换为移动版网页" else "🖥️ 切换为桌面版网页"
+        val pillToggleLabel = if (showFloatingPill) "🔘 隐藏贴边悬浮球" else "🔘 显示贴边悬浮球"
+        val recLabel = if (recoveryEmail.isNotBlank()) "🛡️ 填入辅助邮箱 ($recoveryEmail)" else "🛡️ 填入辅助邮箱 (未配置)"
+        val totpLabel = if (currentTotpCode.isNotBlank() && currentTotpCode != "------") "⏱️ 填入 2FA 动态码 ($currentTotpCode)" else "⏱️ 填入 2FA 动态码 (未配置)"
+
         val items = arrayOf(
-            "📋 复制当前网址",
+            "📧 填入/复制主邮箱 ($email)",
+            "🔑 填入/复制密码",
+            recLabel,
+            totpLabel,
+            "──────────────",
             "🔄 刷新页面",
+            "📋 复制当前网址",
             "🌐 在系统外部浏览器打开",
             modeLabel,
+            pillToggleLabel,
             "🧹 清理沙箱缓存 & Cookie",
             "ℹ️ 账号详情"
         )
@@ -327,14 +551,17 @@ class IsolatedBrowserActivity : Activity() {
             .setTitle(if (email.isNotBlank()) email else "Google 独立沙箱")
             .setItems(items) { _, which ->
                 when (which) {
-                    0 -> {
+                    0 -> fillEmailManually()
+                    1 -> fillPasswordManually()
+                    2 -> fillRecoveryEmailManually()
+                    3 -> fillTotpManually()
+                    4 -> {} // Separator
+                    5 -> if (::webView.isInitialized) webView.reload()
+                    6 -> {
                         copyToClipboard("网址", current)
                         Toast.makeText(this, "网址已复制到剪贴板", Toast.LENGTH_SHORT).show()
                     }
-                    1 -> {
-                        if (::webView.isInitialized) webView.reload()
-                    }
-                    2 -> {
+                    7 -> {
                         try {
                             val extIntent = Intent(Intent.ACTION_VIEW, Uri.parse(current)).apply {
                                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -344,15 +571,16 @@ class IsolatedBrowserActivity : Activity() {
                             Toast.makeText(this, "未找到可用外部浏览器", Toast.LENGTH_SHORT).show()
                         }
                     }
-                    3 -> {
-                        toggleDesktopMode()
+                    8 -> toggleDesktopMode()
+                    9 -> {
+                        showFloatingPill = !showFloatingPill
+                        if (::floatingPillContainer.isInitialized) {
+                            floatingPillContainer.visibility = if (showFloatingPill) View.VISIBLE else View.GONE
+                        }
+                        Toast.makeText(this, if (showFloatingPill) "已开启贴边悬浮球" else "已隐藏贴边悬浮球", Toast.LENGTH_SHORT).show()
                     }
-                    4 -> {
-                        clearSandboxStorage()
-                    }
-                    5 -> {
-                        showAccountDetailsDialog()
-                    }
+                    10 -> clearSandboxStorage()
+                    11 -> showAccountDetailsDialog()
                 }
             }
             .setNegativeButton("取消", null)
@@ -407,14 +635,15 @@ class IsolatedBrowserActivity : Activity() {
     private fun showAccountDetailsDialog() {
         val pwdMasked = if (password.isNotBlank()) "••••••••" else "(未配置)"
         val totpStatus = if (totpSecret.isNotBlank()) "已配置 (当前码: $currentTotpCode)" else "(未配置)"
-        val msg = "邮箱：$email\n密码：$pwdMasked\n2FA：$totpStatus\n沙箱标识：$profileKey"
+        val recStatus = if (recoveryEmail.isNotBlank()) recoveryEmail else "(未配置)"
+        val msg = "主邮箱：$email\n密码：$pwdMasked\n辅助邮箱：$recStatus\n2FA：$totpStatus\n沙箱标识：$profileKey"
         AlertDialog.Builder(this)
             .setTitle("账号沙箱凭据")
             .setMessage(msg)
-            .setPositiveButton("复制密码") { _, _ ->
-                if (password.isNotBlank()) {
-                    copyToClipboard("密码", password)
-                    Toast.makeText(this, "密码已复制到剪贴板", Toast.LENGTH_SHORT).show()
+            .setPositiveButton("复制辅助邮箱") { _, _ ->
+                if (recoveryEmail.isNotBlank()) {
+                    copyToClipboard("辅助邮箱", recoveryEmail)
+                    Toast.makeText(this, "辅助邮箱已复制", Toast.LENGTH_SHORT).show()
                 }
             }
             .setNeutralButton("复制 2FA") { _, _ ->
@@ -432,34 +661,6 @@ class IsolatedBrowserActivity : Activity() {
             finishAndRemoveTask()
         } else {
             finish()
-        }
-    }
-
-    private fun createQuickButton(
-        label: String,
-        bgColorHex: String,
-        textColorHex: String,
-        weight: Float,
-        onClick: () -> Unit
-    ): TextView {
-        val shape = GradientDrawable().apply {
-            shape = GradientDrawable.RECTANGLE
-            cornerRadius = dpToPx(10).toFloat()
-            setColor(Color.parseColor(bgColorHex))
-        }
-        return TextView(this).apply {
-            text = label
-            textSize = 11.5f
-            setTextColor(Color.parseColor(textColorHex))
-            gravity = Gravity.CENTER
-            background = shape
-            isClickable = true
-            isFocusable = true
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, weight).apply {
-                marginStart = dpToPx(3)
-                marginEnd = dpToPx(3)
-            }
-            setOnClickListener { onClick() }
         }
     }
 
@@ -545,15 +746,18 @@ class IsolatedBrowserActivity : Activity() {
         val emailJson = JSONObject.quote(email)
         val pwdJson = JSONObject.quote(password)
         val totpJson = JSONObject.quote(currentTotpCode)
+        val recJson = JSONObject.quote(recoveryEmail)
 
         val js = """
             (function() {
                 const targetEmail = $emailJson;
                 const targetPassword = $pwdJson;
                 const targetTotp = $totpJson;
+                const targetRec = $recJson;
                 let emailFilled = false;
                 let pwdFilled = false;
                 let totpFilled = false;
+                let recFilled = false;
 
                 function autoFill() {
                     if (!window.location.hostname.includes("google.com")) return;
@@ -597,6 +801,21 @@ class IsolatedBrowserActivity : Activity() {
                             totpInput.dispatchEvent(new Event("input", { bubbles: true }));
                             totpInput.dispatchEvent(new Event("change", { bubbles: true }));
                             totpFilled = true;
+                        }
+                    }
+
+                    // 4. Recovery Email Fill
+                    if (targetRec && !recFilled) {
+                        const recInput = document.getElementById("knowledge-preregistered-email-response") ||
+                                         document.querySelector('input[name="knowledgePreregisteredEmailResponse"]') ||
+                                         document.querySelector('input[type="email"][aria-label*="辅助"]') ||
+                                         document.querySelector('input[type="email"][aria-label*="recovery"]');
+                        if (recInput && recInput.value !== targetRec) {
+                            recInput.focus();
+                            recInput.value = targetRec;
+                            recInput.dispatchEvent(new Event("input", { bubbles: true }));
+                            recInput.dispatchEvent(new Event("change", { bubbles: true }));
+                            recFilled = true;
                         }
                     }
                 }
@@ -675,6 +894,38 @@ class IsolatedBrowserActivity : Activity() {
         }
     }
 
+    private fun fillRecoveryEmailManually() {
+        if (!::webView.isInitialized) return
+        if (recoveryEmail.isBlank()) {
+            Toast.makeText(this, "该账号未配置辅助邮箱", Toast.LENGTH_SHORT).show()
+            return
+        }
+        copyToClipboard("辅助邮箱", recoveryEmail)
+        val recJson = JSONObject.quote(recoveryEmail)
+        val js = """
+            (function() {
+                const targetRec = $recJson;
+                const recInput = document.getElementById("knowledge-preregistered-email-response") ||
+                                 document.querySelector('input[name="knowledgePreregisteredEmailResponse"]') ||
+                                 document.querySelector('input[type="email"][aria-label*="辅助"]') ||
+                                 document.querySelector('input[type="email"][aria-label*="recovery"]') ||
+                                 document.querySelector('input[type="email"]') ||
+                                 document.querySelector('input[name="identifier"]');
+                if (recInput) {
+                    recInput.focus();
+                    recInput.value = targetRec;
+                    recInput.dispatchEvent(new Event("input", { bubbles: true }));
+                    recInput.dispatchEvent(new Event("change", { bubbles: true }));
+                    return true;
+                }
+                return false;
+            })();
+        """.trimIndent()
+        webView.evaluateJavascript(js) {
+            Toast.makeText(this, "已复制并填入辅助邮箱: $recoveryEmail", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     private fun fillTotpManually() {
         if (!::webView.isInitialized) return
         if (currentTotpCode.isBlank()) {
@@ -714,7 +965,7 @@ class IsolatedBrowserActivity : Activity() {
 
     private fun startTotpTicker() {
         if (totpSecret.isBlank()) {
-            totpButton.text = "⏱️ 未配 2FA"
+            updateFloatingPillText(30)
             return
         }
 
@@ -722,7 +973,7 @@ class IsolatedBrowserActivity : Activity() {
             override fun run() {
                 val (code, remaining) = TotpHelper.generateTotp(totpSecret)
                 currentTotpCode = code
-                totpButton.text = "⏱️ $code (${remaining}s)"
+                updateFloatingPillText(remaining)
                 mainHandler.postDelayed(this, 1000)
             }
         }
@@ -738,6 +989,7 @@ class IsolatedBrowserActivity : Activity() {
 
     override fun onDestroy() {
         totpRunnable?.let { mainHandler.removeCallbacks(it) }
+        autoCollapseRunnable?.let { mainHandler.removeCallbacks(it) }
         if (::webView.isInitialized) {
             CookieIsolationHelper.saveCookies(this, webView, profileKey, webView.url)
             try {
