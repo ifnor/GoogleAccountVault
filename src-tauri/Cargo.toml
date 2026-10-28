@@ -1,6 +1,6 @@
 [package]
 name = "google-account-vault"
-version = "3.1.12"
+version = "3.1.15"
 description = "Google Account Vault - Modern Native Password & 2FA Manager"
 authors = ["Google Account Vault Team"]
 license = "MIT"
