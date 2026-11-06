@@ -616,6 +616,8 @@ const customUrlInput = ref("https://");
 const servicePresets = [
   { name: "Google 账号", url: "https://myaccount.google.com" },
   { name: "Gmail 邮箱", url: "https://mail.google.com" },
+  { name: "Gemini 官网", url: "https://gemini.google.com" },
+  { name: "Google Cloud 官网", url: "https://cloud.google.com" },
   { name: "云端硬盘", url: "https://drive.google.com" },
   { name: "YouTube", url: "https://www.youtube.com" },
   { name: "安全设置与 2FA", url: "https://myaccount.google.com/security" },
@@ -2705,7 +2707,7 @@ onUnmounted(() => {
       v-if="showCustomUrlModal && selectedRecord"
       class="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center p-4"
     >
-      <div class="w-full max-w-md bg-white rounded-3xl p-6 shadow-xl border border-[#dadce0] flex flex-col">
+      <div class="w-full max-w-md bg-white rounded-3xl p-6 shadow-xl border border-[#dadce0] flex flex-col max-h-[90vh] overflow-y-auto">
         <div class="flex items-center justify-between pb-3 border-b border-[#f1f3f4] mb-4">
           <div>
             <h2 class="text-base font-bold text-[#202124]">独立会话浏览器</h2>
