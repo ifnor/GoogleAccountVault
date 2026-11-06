@@ -238,6 +238,12 @@ pub fn smart_merge_records(
             let local_time = existing.deleted_at.unwrap_or(existing.updated_at);
             let remote_time = r.deleted_at.unwrap_or(r.updated_at);
 
+            let earlier_created = match (existing.created_at, r.created_at) {
+                (a, b) if a > 0 && b > 0 => std::cmp::min(a, b),
+                (a, _) if a > 0 => a,
+                (_, b) => b,
+            };
+
             if remote_time > local_time {
                 // 云端记录更新 -> 采纳云端
                 *existing = r.clone();
@@ -245,6 +251,7 @@ pub fn smart_merge_records(
                 // 本地记录更新 -> 保留本地，并标记需要向云端回写
                 needs_upload = true;
             }
+            existing.created_at = earlier_created;
         } else {
             // 云端新增记录 -> 并在本地
             map.insert(key, r.clone());
@@ -273,7 +280,9 @@ pub fn smart_merge_records(
         }
     }
 
-    let merged: Vec<AccountRecord> = map.into_values().collect();
+    let mut merged: Vec<AccountRecord> = map.into_values().collect();
+    // 基础稳定排序：按邮箱小写升序作为底层基准，避免 HashMap 乱序重排
+    merged.sort_by(|a, b| a.email.to_lowercase().cmp(&b.email.to_lowercase()));
     (merged, needs_upload)
 }
 
@@ -457,6 +466,7 @@ mod tests {
             google_one_status: String::new(),
             status: "active".to_string(),
             updated_at: updated,
+            created_at: updated,
             deleted_at: deleted,
             extra: std::collections::HashMap::new(),
         }

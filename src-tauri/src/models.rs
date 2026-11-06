@@ -34,6 +34,8 @@ pub struct AccountRecord {
     #[serde(default)]
     pub updated_at: i64,
     #[serde(default)]
+    pub created_at: i64,
+    #[serde(default)]
     pub deleted_at: Option<i64>,
     #[serde(flatten)]
     pub extra: HashMap<String, String>,

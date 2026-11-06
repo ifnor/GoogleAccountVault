@@ -183,8 +183,20 @@ fn save_record(
 
     let mut records = state.records.write();
     if let Some(pos) = records.iter().position(|r| r.id == record.id) {
+        if record.created_at == 0 {
+            record.created_at = if records[pos].created_at != 0 {
+                records[pos].created_at
+            } else if records[pos].updated_at != 0 {
+                records[pos].updated_at
+            } else {
+                now
+            };
+        }
         records[pos] = record.clone();
     } else {
+        if record.created_at == 0 {
+            record.created_at = now;
+        }
         records.push(record.clone());
     }
 
@@ -394,8 +406,18 @@ fn import_encrypted_vault_blob(
             .iter()
             .position(|existing| existing.email.eq_ignore_ascii_case(&r.email))
         {
+            if r.created_at == 0 {
+                r.created_at = if records[pos].created_at != 0 {
+                    records[pos].created_at
+                } else {
+                    now
+                };
+            }
             records[pos] = r;
         } else {
+            if r.created_at == 0 {
+                r.created_at = now;
+            }
             records.push(r);
         }
     }
@@ -443,6 +465,9 @@ fn batch_import_records(
             let existing = &mut records[pos];
             existing.updated_at = now;
             existing.deleted_at = None;
+            if existing.created_at == 0 {
+                existing.created_at = now;
+            }
             if !r.password.trim().is_empty() {
                 existing.password = r.password;
             }
@@ -479,6 +504,9 @@ fn batch_import_records(
             }
             if r.google_one_plan.trim().is_empty() {
                 r.google_one_plan = "Free".to_string();
+            }
+            if r.created_at == 0 {
+                r.created_at = now;
             }
             records.push(r);
         }

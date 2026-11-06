@@ -38,6 +38,7 @@ import {
   MoreVertical,
   Zap,
   Shield,
+  ArrowUpDown,
   X
 } from "lucide-vue-next";
 
@@ -58,6 +59,7 @@ interface AccountRecord {
   google_one_used?: string;
   google_one_status?: string;
   updated_at?: number;
+  created_at?: number;
   deleted_at?: number | null;
   [key: string]: any;
 }
@@ -485,9 +487,46 @@ const groups = computed(() => {
   ];
 });
 
+type SortRule = "alphabetical" | "updated_desc" | "created_desc";
+
+const sortRule = ref<SortRule>((localStorage.getItem("gvault_sort_rule") as SortRule) || "alphabetical");
+
+function setSortRule(rule: SortRule) {
+  sortRule.value = rule;
+  try {
+    localStorage.setItem("gvault_sort_rule", rule);
+  } catch (e) {}
+}
+
+const sortRuleLabel = computed(() => {
+  switch (sortRule.value) {
+    case "alphabetical":
+      return "按字母 (A-Z)";
+    case "updated_desc":
+      return "按更新时间";
+    case "created_desc":
+      return "按添加时间";
+    default:
+      return "按字母 (A-Z)";
+  }
+});
+
+function cycleSortRule() {
+  if (sortRule.value === "alphabetical") {
+    setSortRule("updated_desc");
+    notify("已切换为：按更新时间排序 (最近修改优先)", "info", 1800);
+  } else if (sortRule.value === "updated_desc") {
+    setSortRule("created_desc");
+    notify("已切换为：按添加时间排序 (最新录入优先)", "info", 1800);
+  } else {
+    setSortRule("alphabetical");
+    notify("已切换为：按字母顺序排序 (A-Z，固定不跳动)", "info", 1800);
+  }
+}
+
 const filteredRecords = computed(() => {
   const q = searchQuery.value.trim().toLowerCase();
-  return records.value.filter((r) => {
+  const list = records.value.filter((r) => {
     // Group filter
     if (currentGroup.value === "one_active" && r.google_one_status !== "active") return false;
     if (currentGroup.value === "one_expired" && r.google_one_status !== "expired") return false;
@@ -504,6 +543,23 @@ const filteredRecords = computed(() => {
       if (!match.includes(q)) return false;
     }
     return true;
+  });
+
+  return list.sort((a, b) => {
+    if (sortRule.value === "alphabetical") {
+      return (a.email || "").toLowerCase().localeCompare((b.email || "").toLowerCase());
+    } else if (sortRule.value === "updated_desc") {
+      const ta = a.updated_at || a.created_at || 0;
+      const tb = b.updated_at || b.created_at || 0;
+      if (tb !== ta) return tb - ta;
+      return (a.email || "").toLowerCase().localeCompare((b.email || "").toLowerCase());
+    } else if (sortRule.value === "created_desc") {
+      const ta = a.created_at || a.updated_at || 0;
+      const tb = b.created_at || b.updated_at || 0;
+      if (tb !== ta) return tb - ta;
+      return (a.email || "").toLowerCase().localeCompare((b.email || "").toLowerCase());
+    }
+    return 0;
   });
 });
 
@@ -2135,9 +2191,21 @@ onUnmounted(() => {
             'md:flex md:flex-1'
           ]"
         >
-          <div class="px-4 py-2 bg-[#f8fafd] border-b border-[#dadce0] flex items-center justify-between text-xs text-[#5f6368]">
-            <span>共 {{ filteredRecords.length }} 个账号符合筛选</span>
-            <span class="text-[11px] text-[#80868b] hidden md:inline">双击可快速编辑详情</span>
+          <div class="px-3.5 py-1.5 bg-[#f8fafd] border-b border-[#dadce0] flex items-center justify-between text-xs text-[#5f6368]">
+            <div class="flex items-center gap-1.5 truncate">
+              <span>共 {{ filteredRecords.length }} 个账号</span>
+              <span class="text-[11px] text-[#80868b] hidden lg:inline">· 双击编辑</span>
+            </div>
+            <!-- Quick Sort Mode Selector Switcher -->
+            <button
+              type="button"
+              @click="cycleSortRule"
+              class="px-2 py-0.5 bg-white hover:bg-[#e8eaed] text-[#3c4043] border border-[#dadce0]/80 rounded-md text-[11px] font-medium flex items-center gap-1 transition-all cursor-pointer shadow-2xs flex-shrink-0"
+              :title="`当前排序：${sortRuleLabel}，点击切换下一个排序规则`"
+            >
+              <ArrowUpDown class="w-3 h-3 text-[#1a73e8]" />
+              <span>{{ sortRuleLabel }}</span>
+            </button>
           </div>
 
           <div class="flex-1 overflow-y-auto divide-y divide-[#f1f3f4]" @click.self="selectedId = null">
@@ -3210,6 +3278,80 @@ onUnmounted(() => {
                   • <b>按 Esc 键或点击空白区域</b>：快速返回安全留白防窥状态。<br />
                   • <b>详情右上角关闭按钮</b>：一键折叠当前账号。
                 </p>
+              </div>
+            </div>
+
+            <!-- Account List Sort Rule Preference Card -->
+            <div class="p-3.5 sm:p-4 bg-[#f8fafd] rounded-2xl border border-[#dadce0] space-y-3">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-white border border-[#dadce0]/70 flex items-center justify-center text-[#1a73e8] shadow-xs flex-shrink-0">
+                  <ArrowUpDown class="w-5 h-5" />
+                </div>
+                <div class="flex-1 min-w-0">
+                  <h3 class="text-xs font-bold text-[#202124]">账号列表排序规则</h3>
+                  <p class="text-[11px] text-[#5f6368] mt-0.5">
+                    锁定列表显示顺序，彻底解决多端同步或日常保存后账号顺序发生跳动的问题
+                  </p>
+                </div>
+              </div>
+
+              <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+                <button
+                  type="button"
+                  @click="setSortRule('alphabetical')"
+                  :class="[
+                    'p-3 rounded-xl border text-left transition-all flex flex-col justify-between gap-1.5 cursor-pointer',
+                    sortRule === 'alphabetical'
+                      ? 'bg-[#e8f0fe] border-[#1a73e8] text-[#1a73e8] shadow-xs'
+                      : 'bg-white border-[#dadce0]/80 text-[#3c4043] hover:border-[#1a73e8]/60'
+                  ]"
+                >
+                  <div class="flex items-center justify-between">
+                    <span class="text-xs font-bold text-[#202124]">按字母顺序 (A-Z)</span>
+                    <Check v-if="sortRule === 'alphabetical'" class="w-4 h-4 text-[#1a73e8]" />
+                  </div>
+                  <p class="text-[11px] text-[#5f6368] leading-relaxed">
+                    按邮箱名称字母升序排列，位置绝对固定不跳动（推荐）
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  @click="setSortRule('updated_desc')"
+                  :class="[
+                    'p-3 rounded-xl border text-left transition-all flex flex-col justify-between gap-1.5 cursor-pointer',
+                    sortRule === 'updated_desc'
+                      ? 'bg-[#e8f0fe] border-[#1a73e8] text-[#1a73e8] shadow-xs'
+                      : 'bg-white border-[#dadce0]/80 text-[#3c4043] hover:border-[#1a73e8]/60'
+                  ]"
+                >
+                  <div class="flex items-center justify-between">
+                    <span class="text-xs font-bold text-[#202124]">按更新时间</span>
+                    <Check v-if="sortRule === 'updated_desc'" class="w-4 h-4 text-[#1a73e8]" />
+                  </div>
+                  <p class="text-[11px] text-[#5f6368] leading-relaxed">
+                    最近修改密码、备用码或信息的账号排在最上方
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  @click="setSortRule('created_desc')"
+                  :class="[
+                    'p-3 rounded-xl border text-left transition-all flex flex-col justify-between gap-1.5 cursor-pointer',
+                    sortRule === 'created_desc'
+                      ? 'bg-[#e8f0fe] border-[#1a73e8] text-[#1a73e8] shadow-xs'
+                      : 'bg-white border-[#dadce0]/80 text-[#3c4043] hover:border-[#1a73e8]/60'
+                  ]"
+                >
+                  <div class="flex items-center justify-between">
+                    <span class="text-xs font-bold text-[#202124]">按添加时间</span>
+                    <Check v-if="sortRule === 'created_desc'" class="w-4 h-4 text-[#1a73e8]" />
+                  </div>
+                  <p class="text-[11px] text-[#5f6368] leading-relaxed">
+                    按录入入库先后顺序排列，最新添加的账号排在最上方
+                  </p>
+                </button>
               </div>
             </div>
 
