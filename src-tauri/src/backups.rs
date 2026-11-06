@@ -93,7 +93,7 @@ pub fn restore_backup(filename: &str, master_password: &str) -> Result<Vec<Accou
 
 pub fn export_records_csv(records: &[AccountRecord]) -> String {
     let mut csv = String::from(
-        "邮箱,登录密码,账号状态,分组,恢复邮箱,恢复手机,TOTP密钥,Google One状态,Google One方案,到期日期,独立代理,备用验证码,已用备用码,备注\n",
+        "邮箱,登录密码,账号状态,Antigravity状态,分组,恢复邮箱,恢复手机,TOTP密钥,Google One状态,Google One方案,到期日期,独立代理,备用验证码,已用备用码,备注\n",
     );
     for r in records.iter().filter(|r| r.deleted_at.is_none()) {
         let status = if r.status.trim().is_empty() {
@@ -101,11 +101,17 @@ pub fn export_records_csv(records: &[AccountRecord]) -> String {
         } else {
             &r.status
         };
+        let ag_status = if r.antigravity_status.trim().is_empty() {
+            "待验证"
+        } else {
+            &r.antigravity_status
+        };
         let line = format!(
-            "\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\"\n",
+            "\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\"\n",
             r.email.replace('\"', "\"\""),
             r.password.replace('\"', "\"\""),
             status.replace('\"', "\"\""),
+            ag_status.replace('\"', "\"\""),
             r.group.replace('\"', "\"\""),
             r.recovery_email.replace('\"', "\"\""),
             r.phone.replace('\"', "\"\""),

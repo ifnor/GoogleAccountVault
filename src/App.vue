@@ -57,6 +57,7 @@ interface AccountRecord {
   password?: string;
   group?: string;
   status?: string;
+  antigravity_status?: string;
   is_pinned?: boolean;
   expire_at?: string;
   proxy?: string;
@@ -236,6 +237,7 @@ const editForm = ref<AccountRecord>({
   password: "",
   group: "",
   status: "待录入",
+  antigravity_status: "待验证",
   recovery_email: "",
   phone: "",
   totp: "",
@@ -266,6 +268,14 @@ const accountStatusOptions = [
   "验证"
 ];
 
+const antigravityStatusOptions = [
+  "待验证",
+  "正常",
+  "封禁",
+  "验证",
+  "缺少项目ID"
+];
+
 function getStatusBadgeClass(status?: string) {
   const s = status || "待录入";
   switch (s) {
@@ -280,6 +290,23 @@ function getStatusBadgeClass(status?: string) {
     case "待录入":
     default:
       return "px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-600 border border-gray-200/80";
+  }
+}
+
+function getAntigravityBadgeClass(agStatus?: string) {
+  const s = agStatus || "待验证";
+  switch (s) {
+    case "正常":
+      return "px-2 py-0.5 rounded-full text-[10px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200/80";
+    case "验证":
+      return "px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200/80";
+    case "缺少项目ID":
+      return "px-2 py-0.5 rounded-full text-[10px] font-semibold bg-orange-50 text-orange-700 border border-orange-200/80";
+    case "封禁":
+      return "px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-100 text-red-800 border border-red-300";
+    case "待验证":
+    default:
+      return "px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-600 border border-slate-200/80";
   }
 }
 
@@ -610,6 +637,7 @@ function cycleSortRule() {
 const showFilterPanel = ref(false);
 const attrFilter = ref({
   statuses: [] as string[],
+  agStatuses: [] as string[],
   onePlans: [] as string[],
   totp: "all" as "all" | "yes" | "no",
   backupCodes: "all" as "all" | "yes" | "no",
@@ -628,6 +656,15 @@ function toggleAttrStatus(s: string) {
   }
 }
 
+function toggleAttrAgStatus(s: string) {
+  const idx = attrFilter.value.agStatuses.indexOf(s);
+  if (idx >= 0) {
+    attrFilter.value.agStatuses.splice(idx, 1);
+  } else {
+    attrFilter.value.agStatuses.push(s);
+  }
+}
+
 function toggleAttrOnePlan(p: string) {
   const idx = attrFilter.value.onePlans.indexOf(p);
   if (idx >= 0) {
@@ -640,6 +677,7 @@ function toggleAttrOnePlan(p: string) {
 function resetAttrFilter() {
   attrFilter.value = {
     statuses: [],
+    agStatuses: [],
     onePlans: [],
     totp: "all",
     backupCodes: "all",
@@ -653,6 +691,7 @@ function resetAttrFilter() {
 const activeFilterCount = computed(() => {
   let c = 0;
   if (attrFilter.value.statuses.length > 0) c++;
+  if (attrFilter.value.agStatuses.length > 0) c++;
   if (attrFilter.value.onePlans.length > 0) c++;
   if (attrFilter.value.totp !== "all") c++;
   if (attrFilter.value.backupCodes !== "all") c++;
@@ -704,6 +743,10 @@ const filteredRecords = computed(() => {
       const s = r.status || "待录入";
       if (!f.statuses.includes(s)) return false;
     }
+    if (f.agStatuses.length > 0) {
+      const ags = r.antigravity_status || "待验证";
+      if (!f.agStatuses.includes(ags)) return false;
+    }
     if (f.onePlans.length > 0) {
       const p = r.google_one_plan || "Free";
       if (!f.onePlans.includes(p)) return false;
@@ -744,7 +787,7 @@ const filteredRecords = computed(() => {
 
     // Search query
     if (q) {
-      const match = [r.email, r.group, r.notes, r.recovery_email, r.status, r.google_one_plan, r.proxy, r.expire_at].join(" ").toLowerCase();
+      const match = [r.email, r.group, r.notes, r.recovery_email, r.status, r.antigravity_status, r.google_one_plan, r.proxy, r.expire_at].join(" ").toLowerCase();
       if (!match.includes(q)) return false;
     }
     return true;
@@ -790,9 +833,10 @@ async function togglePinRecord(r: AccountRecord) {
 const isBatchSelectMode = ref(false);
 const selectedBatchIds = ref<string[]>([]);
 const showBatchActionModal = ref(false);
-const batchActionType = ref<"group" | "status" | "one">("group");
+const batchActionType = ref<"group" | "status" | "ag_status" | "one">("group");
 const batchTargetGroup = ref("");
 const batchTargetStatus = ref("正常");
+const batchTargetAgStatus = ref("正常");
 const batchTargetOneStatus = ref("active");
 const batchTargetOnePlan = ref("AI Premium");
 
@@ -824,7 +868,7 @@ function toggleSelectAllFiltered() {
   }
 }
 
-function openBatchUpdateDialog(type: "group" | "status" | "one") {
+function openBatchUpdateDialog(type: "group" | "status" | "ag_status" | "one") {
   if (selectedBatchIds.value.length === 0) {
     notify("请先勾选至少一个账号", "warning");
     return;
@@ -841,6 +885,7 @@ async function executeBatchUpdate() {
       ids: selectedBatchIds.value,
       group: batchActionType.value === "group" ? batchTargetGroup.value : null,
       status: batchActionType.value === "status" ? batchTargetStatus.value : null,
+      antigravityStatus: batchActionType.value === "ag_status" ? batchTargetAgStatus.value : null,
       googleOneStatus: batchActionType.value === "one" ? batchTargetOneStatus.value : null,
       googleOnePlan: batchActionType.value === "one" ? batchTargetOnePlan.value : null,
       isPinned: null
@@ -862,6 +907,7 @@ async function executeBatchPin(pin: boolean) {
       ids: selectedBatchIds.value,
       group: null,
       status: null,
+      antigravityStatus: null,
       googleOneStatus: null,
       googleOnePlan: null,
       isPinned: pin
@@ -878,12 +924,13 @@ function executeBatchExportSelected() {
   if (selectedBatchIds.value.length === 0) return;
   const idSet = new Set(selectedBatchIds.value);
   const selectedList = records.value.filter((r) => idSet.has(r.id));
-  const header = "邮箱,登录密码,账号状态,分组,恢复邮箱,恢复手机,TOTP密钥,Google One状态,Google One方案,到期日期,独立代理,备用验证码,备注\n";
+  const header = "邮箱,登录密码,账号状态,Antigravity状态,分组,恢复邮箱,恢复手机,TOTP密钥,Google One状态,Google One方案,到期日期,独立代理,备用验证码,备注\n";
   const rows = selectedList.map((r) => {
     const fields = [
       r.email || "",
       r.password || "",
       r.status || "待录入",
+      r.antigravity_status || "待验证",
       r.group || "",
       r.recovery_email || "",
       r.phone || "",
@@ -1146,6 +1193,7 @@ function openAddModal() {
     password: "",
     group: "",
     status: "待录入",
+    antigravity_status: "待验证",
     is_pinned: false,
     expire_at: "",
     proxy: "",
@@ -1170,6 +1218,9 @@ function openEditModal(record: AccountRecord) {
   }
   if (!editForm.value.status) {
     editForm.value.status = "待录入";
+  }
+  if (!editForm.value.antigravity_status) {
+    editForm.value.antigravity_status = "待验证";
   }
   if (editForm.value.is_pinned === undefined) {
     editForm.value.is_pinned = false;
@@ -3005,6 +3056,37 @@ onUnmounted(() => {
               </button>
             </div>
 
+            <!-- 1.5 Antigravity 状态 (Multi-select) -->
+            <div class="flex flex-wrap items-center gap-1.5">
+              <span class="text-[#5f6368] w-16 flex-shrink-0" title="Antigravity (反重力) 状态">反重力：</span>
+              <button
+                type="button"
+                @click="attrFilter.agStatuses = []"
+                :class="[
+                  'px-2 py-0.5 rounded-md border text-[11px] cursor-pointer transition-all',
+                  attrFilter.agStatuses.length === 0
+                    ? 'bg-[#1a73e8] text-white border-[#1a73e8] font-medium'
+                    : 'bg-white text-[#5f6368] border-[#dadce0] hover:bg-[#f1f3f4]'
+                ]"
+              >
+                不限
+              </button>
+              <button
+                v-for="ag in antigravityStatusOptions"
+                :key="ag"
+                type="button"
+                @click="toggleAttrAgStatus(ag)"
+                :class="[
+                  'px-2 py-0.5 rounded-md border text-[11px] cursor-pointer transition-all',
+                  attrFilter.agStatuses.includes(ag)
+                    ? 'bg-[#e8f0fe] text-[#1a73e8] border-[#1a73e8] font-semibold'
+                    : 'bg-white text-[#5f6368] border-[#dadce0] hover:bg-[#f1f3f4]'
+                ]"
+              >
+                {{ ag }}
+              </button>
+            </div>
+
             <!-- 2. Google One 套餐 (Multi-select) -->
             <div class="flex flex-wrap items-center gap-1.5">
               <span class="text-[#5f6368] w-16 flex-shrink-0">One 套餐：</span>
@@ -3230,7 +3312,10 @@ onUnmounted(() => {
                 <div class="min-w-0">
                   <div class="text-xs font-semibold text-[#202124] truncate flex items-center gap-1.5 flex-wrap">
                     <span class="truncate">{{ r.email }}</span>
-                    <span :class="getStatusBadgeClass(r.status)">{{ r.status || '待录入' }}</span>
+                    <span :class="getStatusBadgeClass(r.status)" title="账号状态">{{ r.status || '待录入' }}</span>
+                    <span :class="getAntigravityBadgeClass(r.antigravity_status)" title="Antigravity (反重力) 状态">
+                      AG: {{ r.antigravity_status || '待验证' }}
+                    </span>
                     <span v-if="r.expire_at && getExpireBadge(r.expire_at)" :class="getExpireBadge(r.expire_at)?.class">
                       {{ getExpireBadge(r.expire_at)?.label }}
                     </span>
@@ -3342,6 +3427,15 @@ onUnmounted(() => {
               </button>
               <button
                 type="button"
+                @click="openBatchUpdateDialog('ag_status')"
+                :disabled="selectedBatchIds.length === 0"
+                class="px-2.5 py-1 bg-white hover:bg-[#e8f0fe] text-[#3c4043] border border-[#dadce0] rounded-lg text-[11px] font-medium flex items-center gap-1 disabled:opacity-50 cursor-pointer"
+              >
+                <Zap class="w-3 h-3 text-indigo-600" />
+                <span>改反重力</span>
+              </button>
+              <button
+                type="button"
                 @click="openBatchUpdateDialog('one')"
                 :disabled="selectedBatchIds.length === 0"
                 class="px-2.5 py-1 bg-white hover:bg-[#e8f0fe] text-[#3c4043] border border-[#dadce0] rounded-lg text-[11px] font-medium flex items-center gap-1 disabled:opacity-50 cursor-pointer"
@@ -3441,7 +3535,10 @@ onUnmounted(() => {
                           :class="selectedRecord.is_pinned ? 'text-amber-400 fill-amber-400' : 'text-[#80868b] hover:text-amber-400'"
                         />
                       </button>
-                      <span :class="getStatusBadgeClass(selectedRecord.status)">{{ selectedRecord.status || '待录入' }}</span>
+                      <span :class="getStatusBadgeClass(selectedRecord.status)" title="账号状态">{{ selectedRecord.status || '待录入' }}</span>
+                      <span :class="getAntigravityBadgeClass(selectedRecord.antigravity_status)" title="Antigravity (反重力) 状态">
+                        AG: {{ selectedRecord.antigravity_status || '待验证' }}
+                      </span>
                       <button
                         @click="selectedId = null"
                         class="hidden md:flex p-0.5 hover:bg-[#f1f3f4] text-[#80868b] hover:text-[#202124] rounded-md transition-colors cursor-pointer"
@@ -3550,6 +3647,11 @@ onUnmounted(() => {
                 <div class="text-[#5f6368]">账号状态</div>
                 <div>
                   <span :class="getStatusBadgeClass(selectedRecord.status)">{{ selectedRecord.status || '待录入' }}</span>
+                </div>
+
+                <div class="text-[#5f6368]">Antigravity状态</div>
+                <div>
+                  <span :class="getAntigravityBadgeClass(selectedRecord.antigravity_status)">{{ selectedRecord.antigravity_status || '待验证' }}</span>
                 </div>
 
                 <div class="text-[#5f6368]">恢复邮箱</div>
@@ -3775,7 +3877,7 @@ onUnmounted(() => {
             />
           </div>
 
-          <div class="grid grid-cols-2 gap-3">
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label class="block text-xs font-semibold text-[#5f6368] mb-1">所属分组</label>
               <input
@@ -3792,6 +3894,15 @@ onUnmounted(() => {
                 class="w-full px-3 py-2 bg-[#f1f3f4] focus:bg-white rounded-xl border border-transparent focus:border-[#1a73e8] text-xs outline-none font-medium text-[#202124]"
               >
                 <option v-for="st in accountStatusOptions" :key="st" :value="st">{{ st }}</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-[#5f6368] mb-1">Antigravity状态</label>
+              <select
+                v-model="editForm.antigravity_status"
+                class="w-full px-3 py-2 bg-[#f1f3f4] focus:bg-white rounded-xl border border-transparent focus:border-[#1a73e8] text-xs outline-none font-medium text-[#202124]"
+              >
+                <option v-for="ag in antigravityStatusOptions" :key="ag" :value="ag">{{ ag }}</option>
               </select>
             </div>
           </div>
@@ -5551,7 +5662,9 @@ onUnmounted(() => {
               batchActionType === 'group'
                 ? `批量修改分组 (${selectedBatchIds.length} 个账号)`
                 : batchActionType === 'status'
-                ? `批量修改状态 (${selectedBatchIds.length} 个账号)`
+                ? `批量修改账号状态 (${selectedBatchIds.length} 个账号)`
+                : batchActionType === 'ag_status'
+                ? `批量修改 Antigravity 状态 (${selectedBatchIds.length} 个账号)`
                 : `批量修改 Google One (${selectedBatchIds.length} 个账号)`
             }}
           </h3>
@@ -5577,6 +5690,16 @@ onUnmounted(() => {
             class="w-full px-3 py-2 bg-[#f1f3f4] focus:bg-white rounded-xl border border-transparent focus:border-[#1a73e8] text-xs outline-none font-medium"
           >
             <option v-for="st in accountStatusOptions" :key="st" :value="st">{{ st }}</option>
+          </select>
+        </div>
+
+        <div v-else-if="batchActionType === 'ag_status'" class="space-y-2">
+          <label class="block text-xs font-semibold text-[#5f6368]">选择 Antigravity (反重力) 状态</label>
+          <select
+            v-model="batchTargetAgStatus"
+            class="w-full px-3 py-2 bg-[#f1f3f4] focus:bg-white rounded-xl border border-transparent focus:border-[#1a73e8] text-xs outline-none font-medium"
+          >
+            <option v-for="ag in antigravityStatusOptions" :key="ag" :value="ag">{{ ag }}</option>
           </select>
         </div>
 

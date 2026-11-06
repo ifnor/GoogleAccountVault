@@ -175,6 +175,9 @@ fn save_record(
     if record.status.trim().is_empty() {
         record.status = "待录入".to_string();
     }
+    if record.antigravity_status.trim().is_empty() {
+        record.antigravity_status = "待验证".to_string();
+    }
     if record.google_one_plan.trim().is_empty() {
         record.google_one_plan = "Free".to_string();
     }
@@ -237,6 +240,7 @@ fn batch_update_records(
     ids: Vec<String>,
     group: Option<String>,
     status: Option<String>,
+    antigravity_status: Option<String>,
     google_one_status: Option<String>,
     google_one_plan: Option<String>,
     is_pinned: Option<bool>,
@@ -266,6 +270,9 @@ fn batch_update_records(
             }
             if let Some(ref st) = status {
                 r.status = st.trim().to_string();
+            }
+            if let Some(ref ags) = antigravity_status {
+                r.antigravity_status = ags.trim().to_string();
             }
             if let Some(ref gos) = google_one_status {
                 r.google_one_status = gos.trim().to_string();
@@ -656,6 +663,9 @@ fn batch_import_records(
             if !r.status.trim().is_empty() {
                 existing.status = r.status;
             }
+            if !r.antigravity_status.trim().is_empty() {
+                existing.antigravity_status = r.antigravity_status;
+            }
             if !r.google_one_plan.trim().is_empty() {
                 existing.google_one_plan = r.google_one_plan;
             }
@@ -674,6 +684,9 @@ fn batch_import_records(
         } else {
             if r.status.trim().is_empty() {
                 r.status = "待录入".to_string();
+            }
+            if r.antigravity_status.trim().is_empty() {
+                r.antigravity_status = "待验证".to_string();
             }
             if r.google_one_plan.trim().is_empty() {
                 r.google_one_plan = "Free".to_string();

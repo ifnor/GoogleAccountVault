@@ -483,6 +483,7 @@ mod tests {
             google_one_used: String::new(),
             google_one_status: String::new(),
             status: "active".to_string(),
+            antigravity_status: "待验证".to_string(),
             is_pinned: false,
             expire_at: String::new(),
             proxy: String::new(),

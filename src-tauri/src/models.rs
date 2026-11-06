@@ -32,6 +32,8 @@ pub struct AccountRecord {
     #[serde(default)]
     pub status: String,
     #[serde(default)]
+    pub antigravity_status: String,
+    #[serde(default)]
     pub is_pinned: bool,
     #[serde(default)]
     pub expire_at: String,
