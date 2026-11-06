@@ -6,7 +6,7 @@ pub mod utils;
 pub mod vault;
 pub mod webdav;
 
-use models::{AccountRecord, TotpResult};
+use models::{AccountRecord, TotpQrResult, TotpResult};
 use parking_lot::RwLock;
 use std::fs;
 use tauri::State;
@@ -100,7 +100,7 @@ async fn unlock_vault_with_hello(
     *state.master_password.write() = Some(password);
     *state.vault_key.write() = Some((key, salt));
     *state.records.write() = records.clone();
-    Ok(records)
+    Ok(records.into_iter().filter(|r| r.deleted_at.is_none()).collect())
 }
 
 #[tauri::command]
@@ -118,7 +118,7 @@ fn unlock_vault(
     *state.master_password.write() = Some(password);
     *state.vault_key.write() = Some((key, salt));
     *state.records.write() = records.clone();
-    Ok(records)
+    Ok(records.into_iter().filter(|r| r.deleted_at.is_none()).collect())
 }
 
 #[tauri::command]
@@ -233,8 +233,164 @@ fn delete_record(id: String, state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn batch_update_records(
+    ids: Vec<String>,
+    group: Option<String>,
+    status: Option<String>,
+    google_one_status: Option<String>,
+    google_one_plan: Option<String>,
+    is_pinned: Option<bool>,
+    state: State<'_, AppState>,
+) -> Result<Vec<AccountRecord>, String> {
+    let password_lock = state.master_password.read();
+    let password = password_lock.as_ref().ok_or("保险库已锁定，无法批量修改")?;
+
+    if ids.is_empty() {
+        let all = state.records.read();
+        return Ok(all.iter().filter(|r| r.deleted_at.is_none()).cloned().collect());
+    }
+
+    let id_set: std::collections::HashSet<String> = ids.into_iter().collect();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+
+    let mut records = state.records.write();
+    let mut changed = false;
+
+    for r in records.iter_mut() {
+        if r.deleted_at.is_none() && id_set.contains(&r.id) {
+            if let Some(ref g) = group {
+                r.group = g.trim().to_string();
+            }
+            if let Some(ref st) = status {
+                r.status = st.trim().to_string();
+            }
+            if let Some(ref gos) = google_one_status {
+                r.google_one_status = gos.trim().to_string();
+            }
+            if let Some(ref gop) = google_one_plan {
+                r.google_one_plan = gop.trim().to_string();
+            }
+            if let Some(pin) = is_pinned {
+                r.is_pinned = pin;
+            }
+            r.updated_at = now;
+            changed = true;
+        }
+    }
+
+    if changed {
+        if let Some((key, salt)) = state.vault_key.read().as_ref() {
+            vault::save_vault_atomic_with_key(&records, key, salt, 30)?;
+        } else {
+            vault::save_vault_atomic(&records, password, 30)?;
+        }
+    }
+
+    Ok(records
+        .iter()
+        .filter(|r| r.deleted_at.is_none())
+        .cloned()
+        .collect())
+}
+
+#[tauri::command]
+fn batch_delete_records(
+    ids: Vec<String>,
+    state: State<'_, AppState>,
+) -> Result<Vec<AccountRecord>, String> {
+    let password_lock = state.master_password.read();
+    let password = password_lock.as_ref().ok_or("保险库已锁定，无法批量删除")?;
+
+    let id_set: std::collections::HashSet<String> = ids.into_iter().collect();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+
+    let mut records = state.records.write();
+    let mut changed = false;
+
+    for r in records.iter_mut() {
+        if r.deleted_at.is_none() && id_set.contains(&r.id) {
+            r.deleted_at = Some(now);
+            r.updated_at = now;
+            changed = true;
+        }
+    }
+
+    if changed {
+        if let Some((key, salt)) = state.vault_key.read().as_ref() {
+            vault::save_vault_atomic_with_key(&records, key, salt, 30)?;
+        } else {
+            vault::save_vault_atomic(&records, password, 30)?;
+        }
+    }
+
+    Ok(records
+        .iter()
+        .filter(|r| r.deleted_at.is_none())
+        .cloned()
+        .collect())
+}
+
+#[tauri::command]
+fn change_master_password(
+    old_password: String,
+    new_password: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let current_pwd = {
+        let guard = state.master_password.read();
+        guard
+            .as_ref()
+            .ok_or("保险库已锁定，请先解锁")?
+            .clone()
+    };
+
+    if old_password != current_pwd {
+        return Err("原主密码输入不正确".to_string());
+    }
+    if new_password.trim().is_empty() {
+        return Err("新主密码不能为空".to_string());
+    }
+    if new_password.len() < 4 {
+        return Err("新主密码长度建议至少 4 位".to_string());
+    }
+
+    let mut salt = [0u8; 16];
+    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut salt);
+    let key = vault::derive_key(&new_password, &salt)?;
+
+    let records = state.records.read().clone();
+    vault::save_vault_atomic_with_key(&records, &key, &salt, 30)?;
+
+    *state.master_password.write() = Some(new_password.clone());
+    *state.vault_key.write() = Some((key, salt));
+
+    // 如果已启用 Windows Hello，同步更新 DPAPI 绑定的主密码
+    if hello::is_hello_enrolled() {
+        let _ = hello::save_hello_credentials(&new_password);
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
 fn get_totp(secret: String) -> Result<TotpResult, String> {
     totp::calculate_totp(&secret)
+}
+
+#[tauri::command]
+fn get_totp_qr(secret: String, email: String) -> Result<TotpQrResult, String> {
+    totp::generate_totp_qr(&secret, &email)
+}
+
+#[tauri::command]
+fn parse_totp_input(raw: String) -> Result<String, String> {
+    totp::normalize_totp_secret(&raw)
 }
 
 #[tauri::command]
@@ -337,6 +493,14 @@ async fn download_webdav_vault(
 #[tauri::command]
 fn list_vault_backups() -> Result<Vec<backups::BackupFileInfo>, String> {
     backups::list_backups()
+}
+
+#[tauri::command]
+fn create_manual_vault_backup(state: State<'_, AppState>) -> Result<backups::BackupFileInfo, String> {
+    if state.master_password.read().is_none() {
+        return Err("请先解锁保险库".to_string());
+    }
+    backups::create_snapshot_now()
 }
 
 #[tauri::command]
@@ -498,6 +662,15 @@ fn batch_import_records(
             if !r.google_one_status.trim().is_empty() {
                 existing.google_one_status = r.google_one_status;
             }
+            if !r.expire_at.trim().is_empty() {
+                existing.expire_at = r.expire_at;
+            }
+            if !r.proxy.trim().is_empty() {
+                existing.proxy = r.proxy;
+            }
+            if r.is_pinned {
+                existing.is_pinned = true;
+            }
         } else {
             if r.status.trim().is_empty() {
                 r.status = "待录入".to_string();
@@ -513,7 +686,11 @@ fn batch_import_records(
         imported_count += 1;
     }
 
-    vault::save_vault_atomic(&records, password, 30)?;
+    if let Some((key, salt)) = state.vault_key.read().as_ref() {
+        vault::save_vault_atomic_with_key(&records, key, salt, 30)?;
+    } else {
+        vault::save_vault_atomic(&records, password, 30)?;
+    }
     Ok(imported_count)
 }
 
@@ -565,6 +742,7 @@ async fn open_in_app_browser(
     password: Option<String>,
     totp_secret: Option<String>,
     recovery_email: Option<String>,
+    proxy: Option<String>,
     url: String,
 ) -> Result<(), String> {
     let clean_email = email.trim().to_lowercase();
@@ -693,6 +871,7 @@ async fn open_in_app_browser(
             current_totp,
             safe_totp_json,
             autofill_script,
+            proxy,
         );
         let ctx = ndk_context::android_context();
         let vm_ptr = ctx.vm();
@@ -776,18 +955,40 @@ async fn open_in_app_browser(
         let _ = std::fs::create_dir_all(&session_dir);
         let ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0";
 
-        let builder = tauri::WebviewWindowBuilder::new(
+        let clean_proxy = proxy.as_deref().unwrap_or("").trim().to_string();
+        let window_title = if !clean_proxy.is_empty() {
+            format!("Google 独立会话 - {} [独立代理: {}]", email, clean_proxy)
+        } else {
+            format!("Google 独立会话 - {}", email)
+        };
+
+        let mut builder = tauri::WebviewWindowBuilder::new(
             app,
             &safe_label,
             tauri::WebviewUrl::External(parsed_url),
         )
-        .title(format!("Google 独立会话 - {}", email))
+        .title(window_title)
         .inner_size(1050.0, 750.0)
         .center()
         .user_agent(ua)
         .devtools(true)
         .initialization_script(&autofill_script)
         .data_directory(session_dir);
+
+        if !clean_proxy.is_empty() {
+            let normalized_proxy = if clean_proxy.contains("://") {
+                clean_proxy.clone()
+            } else {
+                format!("http://{}", clean_proxy)
+            };
+            if let Ok(proxy_url) = tauri::Url::parse(&normalized_proxy) {
+                builder = builder.proxy_url(proxy_url);
+            }
+            #[cfg(target_os = "windows")]
+            {
+                builder = builder.additional_browser_args(&format!("--proxy-server={}", clean_proxy));
+            }
+        }
 
         let _window = builder
             .build()
@@ -896,7 +1097,7 @@ async fn check_github_update(
     });
 
     let client = reqwest::Client::builder()
-        .user_agent("google-account-vault/3.1.16")
+        .user_agent("google-account-vault/3.1.17")
         .timeout(std::time::Duration::from_secs(8))
         .build()
         .map_err(|e| format!("构建 HTTP 客户端失败: {e}"))?;
@@ -915,8 +1116,8 @@ async fn check_github_update(
 
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(UpdateInfo {
-            current_version: "3.1.16".to_string(),
-            latest_version: "3.1.16".to_string(),
+            current_version: "3.1.17".to_string(),
+            latest_version: "3.1.17".to_string(),
             has_update: false,
             release_name: "暂无发布版本".to_string(),
             release_notes: format!("仓库 {} 尚未发布任何公开 Release", target_repo),
@@ -942,7 +1143,7 @@ async fn check_github_update(
     let json: serde_json::Value =
         serde_json::from_str(&body).map_err(|e| format!("解析 Release JSON 失败: {e}"))?;
 
-    let tag = json["tag_name"].as_str().unwrap_or("3.1.16").to_string();
+    let tag = json["tag_name"].as_str().unwrap_or("3.1.17").to_string();
     let name = json["name"].as_str().unwrap_or(&tag).to_string();
     let notes = json["body"].as_str().unwrap_or("").to_string();
     let published_at = json["published_at"].as_str().unwrap_or("").to_string();
@@ -1007,12 +1208,12 @@ async fn check_github_update(
         _ => setup_url.clone().or_else(|| portable_url.clone()),
     };
 
-    let current = (3, 1, 16);
+    let current = (3, 1, 17);
     let latest = parse_semver(&tag);
     let has_update = latest > current;
 
     Ok(UpdateInfo {
-        current_version: "3.1.16".to_string(),
+        current_version: "3.1.17".to_string(),
         latest_version: tag,
         has_update,
         release_name: name,
@@ -1090,7 +1291,7 @@ async fn start_auto_update(app: tauri::AppHandle, url: String) -> Result<(), Str
     use tauri::Emitter;
 
     let client = reqwest::Client::builder()
-        .user_agent("google-account-vault/3.1.16")
+        .user_agent("google-account-vault/3.1.17")
         .build()
         .map_err(|e| format!("初始化下载客户端失败: {e}"))?;
 
@@ -1272,7 +1473,12 @@ pub fn run() {
             get_records,
             save_record,
             delete_record,
+            batch_update_records,
+            batch_delete_records,
+            change_master_password,
             get_totp,
+            get_totp_qr,
+            parse_totp_input,
             generate_pwd,
             open_in_app_browser,
             test_webdav_connection,
@@ -1281,6 +1487,7 @@ pub fn run() {
             upload_webdav_vault,
             download_webdav_vault,
             list_vault_backups,
+            create_manual_vault_backup,
             restore_vault_backup,
             export_records_csv_string,
             export_encrypted_vault_string,

@@ -39,8 +39,17 @@ import {
   Zap,
   Shield,
   ArrowUpDown,
+  Star,
+  CheckSquare,
+  Square,
+  QrCode,
+  Calendar,
+  Network,
+  Filter,
+  RotateCcw,
   X
 } from "lucide-vue-next";
+import jsQR from "jsqr";
 
 interface AccountRecord {
   id: string;
@@ -48,6 +57,9 @@ interface AccountRecord {
   password?: string;
   group?: string;
   status?: string;
+  is_pinned?: boolean;
+  expire_at?: string;
+  proxy?: string;
   recovery_email?: string;
   phone?: string;
   totp?: string;
@@ -67,6 +79,12 @@ interface AccountRecord {
 interface TotpResult {
   code: string;
   remaining_seconds: number;
+}
+
+interface TotpQrResult {
+  qr_base64: string;
+  otpauth_url: string;
+  secret: string;
 }
 
 // App State
@@ -465,6 +483,61 @@ async function updateAllTotp() {
   }
 }
 
+// Expiration Date Helper (Package C)
+function getExpireDaysLeft(expireAt?: string): number | null {
+  if (!expireAt || !expireAt.trim()) return null;
+  const parts = expireAt.trim().split("-");
+  if (parts.length !== 3) return null;
+  const target = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]), 23, 59, 59);
+  if (isNaN(target.getTime())) return null;
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
+  return Math.floor((target.getTime() - todayStart.getTime()) / (1000 * 3600 * 24));
+}
+
+function isExpiringSoon(expireAt?: string): boolean {
+  const days = getExpireDaysLeft(expireAt);
+  return days !== null && days <= 7;
+}
+
+function getExpireBadge(expireAt?: string): { label: string; class: string; urgent: boolean } | null {
+  const days = getExpireDaysLeft(expireAt);
+  if (days === null) return null;
+  if (days < 0) {
+    return {
+      label: `已过期 ${Math.abs(days)} 天`,
+      class: "px-1.5 py-0.2 rounded text-[10px] font-bold bg-red-100 text-red-800 border border-red-300",
+      urgent: true
+    };
+  }
+  if (days === 0) {
+    return {
+      label: "今日到期",
+      class: "px-1.5 py-0.2 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300",
+      urgent: true
+    };
+  }
+  if (days <= 7) {
+    return {
+      label: `${days}天后到期`,
+      class: "px-1.5 py-0.2 rounded text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200",
+      urgent: true
+    };
+  }
+  if (days <= 30) {
+    return {
+      label: `${days}天后到期`,
+      class: "px-1.5 py-0.2 rounded text-[10px] font-medium bg-blue-50 text-blue-700 border border-blue-200",
+      urgent: false
+    };
+  }
+  return {
+    label: `到期: ${expireAt}`,
+    class: "px-1.5 py-0.2 rounded text-[10px] font-mono bg-[#f1f3f4] text-[#5f6368]",
+    urgent: false
+  };
+}
+
 // Computed Filtering
 const selectedRecord = computed(() => {
   return records.value.find((r) => r.id === selectedId.value) || null;
@@ -472,8 +545,17 @@ const selectedRecord = computed(() => {
 
 const groups = computed(() => {
   const custom = Array.from(new Set(records.value.map((r) => (r.group || "").trim()).filter(Boolean))).sort();
-  return [
+  const pinnedCount = records.value.filter((r) => r.is_pinned).length;
+  const expiringCount = records.value.filter((r) => isExpiringSoon(r.expire_at)).length;
+  const baseGroups: Array<{ key: string | null; label: string; count: number }> = [
     { key: null, label: "全部账号", count: records.value.length },
+    { key: "pinned", label: "⭐ 星标置顶", count: pinnedCount },
+  ];
+  if (expiringCount > 0 || currentGroup.value === "expiring") {
+    baseGroups.push({ key: "expiring", label: "⏰ 即将到期", count: expiringCount });
+  }
+  return [
+    ...baseGroups,
     { key: "one_active", label: "One 有效", count: records.value.filter((r) => r.google_one_status === "active").length },
     { key: "one_expired", label: "One 已失效", count: records.value.filter((r) => r.google_one_status === "expired").length },
     { key: "one_inactive", label: "One 非会员", count: records.value.filter((r) => r.google_one_status === "inactive").length },
@@ -524,28 +606,155 @@ function cycleSortRule() {
   }
 }
 
+// ==================== MULTI-ATTRIBUTE FILTERING ====================
+const showFilterPanel = ref(false);
+const attrFilter = ref({
+  statuses: [] as string[],
+  onePlans: [] as string[],
+  totp: "all" as "all" | "yes" | "no",
+  backupCodes: "all" as "all" | "yes" | "no",
+  recoveryEmail: "all" as "all" | "yes" | "no",
+  phone: "all" as "all" | "yes" | "no",
+  proxy: "all" as "all" | "yes" | "no",
+  expire: "all" as "all" | "expired" | "soon7" | "soon30" | "has_date" | "no_date"
+});
+
+function toggleAttrStatus(s: string) {
+  const idx = attrFilter.value.statuses.indexOf(s);
+  if (idx >= 0) {
+    attrFilter.value.statuses.splice(idx, 1);
+  } else {
+    attrFilter.value.statuses.push(s);
+  }
+}
+
+function toggleAttrOnePlan(p: string) {
+  const idx = attrFilter.value.onePlans.indexOf(p);
+  if (idx >= 0) {
+    attrFilter.value.onePlans.splice(idx, 1);
+  } else {
+    attrFilter.value.onePlans.push(p);
+  }
+}
+
+function resetAttrFilter() {
+  attrFilter.value = {
+    statuses: [],
+    onePlans: [],
+    totp: "all",
+    backupCodes: "all",
+    recoveryEmail: "all",
+    phone: "all",
+    proxy: "all",
+    expire: "all"
+  };
+}
+
+const activeFilterCount = computed(() => {
+  let c = 0;
+  if (attrFilter.value.statuses.length > 0) c++;
+  if (attrFilter.value.onePlans.length > 0) c++;
+  if (attrFilter.value.totp !== "all") c++;
+  if (attrFilter.value.backupCodes !== "all") c++;
+  if (attrFilter.value.recoveryEmail !== "all") c++;
+  if (attrFilter.value.phone !== "all") c++;
+  if (attrFilter.value.proxy !== "all") c++;
+  if (attrFilter.value.expire !== "all") c++;
+  return c;
+});
+
+function hasUnusedBackupCodes(r: AccountRecord): boolean {
+  const raw = (r.backup_codes || "").trim();
+  if (!raw) return false;
+  const codes = raw.split(/[\r\n,;\t]+/).map((s) => s.replace(/\s+/g, "").trim()).filter((s) => s.length >= 6);
+  if (codes.length === 0) return false;
+  let used: string[] = [];
+  try {
+    used = JSON.parse(r.used_backup_codes || "[]");
+  } catch (_) {}
+  const usedSet = new Set(used);
+  return codes.some((c) => !usedSet.has(c));
+}
+
 const filteredRecords = computed(() => {
   const q = searchQuery.value.trim().toLowerCase();
+  const f = attrFilter.value;
   const list = records.value.filter((r) => {
     // Group filter
+    if (currentGroup.value === "pinned" && !r.is_pinned) return false;
+    if (currentGroup.value === "expiring" && !isExpiringSoon(r.expire_at)) return false;
     if (currentGroup.value === "one_active" && r.google_one_status !== "active") return false;
     if (currentGroup.value === "one_expired" && r.google_one_status !== "expired") return false;
     if (currentGroup.value === "one_inactive" && r.google_one_status !== "inactive") return false;
     if (currentGroup.value === "one_unknown" && r.google_one_status && r.google_one_status !== "unknown") return false;
     if (currentGroup.value === "" && (r.group || "").trim() !== "") return false;
-    if (currentGroup.value && !currentGroup.value.startsWith("one_") && currentGroup.value !== "" && (r.group || "").trim() !== currentGroup.value) {
+    if (
+      currentGroup.value &&
+      currentGroup.value !== "pinned" &&
+      currentGroup.value !== "expiring" &&
+      !currentGroup.value.startsWith("one_") &&
+      currentGroup.value !== "" &&
+      (r.group || "").trim() !== currentGroup.value
+    ) {
       return false;
+    }
+
+    // Attribute filters
+    if (f.statuses.length > 0) {
+      const s = r.status || "待录入";
+      if (!f.statuses.includes(s)) return false;
+    }
+    if (f.onePlans.length > 0) {
+      const p = r.google_one_plan || "Free";
+      if (!f.onePlans.includes(p)) return false;
+    }
+    if (f.totp !== "all") {
+      const hasTotp = Boolean((r.totp || "").trim());
+      if (f.totp === "yes" && !hasTotp) return false;
+      if (f.totp === "no" && hasTotp) return false;
+    }
+    if (f.backupCodes !== "all") {
+      const hasValidBc = hasUnusedBackupCodes(r);
+      if (f.backupCodes === "yes" && !hasValidBc) return false;
+      if (f.backupCodes === "no" && hasValidBc) return false;
+    }
+    if (f.recoveryEmail !== "all") {
+      const hasRec = Boolean((r.recovery_email || "").trim());
+      if (f.recoveryEmail === "yes" && !hasRec) return false;
+      if (f.recoveryEmail === "no" && hasRec) return false;
+    }
+    if (f.phone !== "all") {
+      const hasPh = Boolean((r.phone || "").trim());
+      if (f.phone === "yes" && !hasPh) return false;
+      if (f.phone === "no" && hasPh) return false;
+    }
+    if (f.proxy !== "all") {
+      const hasPrx = Boolean((r.proxy || "").trim());
+      if (f.proxy === "yes" && !hasPrx) return false;
+      if (f.proxy === "no" && hasPrx) return false;
+    }
+    if (f.expire !== "all") {
+      const days = getExpireDaysLeft(r.expire_at);
+      if (f.expire === "expired" && (days === null || days >= 0)) return false;
+      if (f.expire === "soon7" && (days === null || days < 0 || days > 7)) return false;
+      if (f.expire === "soon30" && (days === null || days < 0 || days > 30)) return false;
+      if (f.expire === "has_date" && days === null) return false;
+      if (f.expire === "no_date" && days !== null) return false;
     }
 
     // Search query
     if (q) {
-      const match = [r.email, r.group, r.notes, r.recovery_email, r.status, r.google_one_plan].join(" ").toLowerCase();
+      const match = [r.email, r.group, r.notes, r.recovery_email, r.status, r.google_one_plan, r.proxy, r.expire_at].join(" ").toLowerCase();
       if (!match.includes(q)) return false;
     }
     return true;
   });
 
   return list.sort((a, b) => {
+    // Pinned accounts always stay at the top
+    if (Boolean(a.is_pinned) !== Boolean(b.is_pinned)) {
+      return a.is_pinned ? -1 : 1;
+    }
     if (sortRule.value === "alphabetical") {
       return (a.email || "").toLowerCase().localeCompare((b.email || "").toLowerCase());
     } else if (sortRule.value === "updated_desc") {
@@ -563,12 +772,367 @@ const filteredRecords = computed(() => {
   });
 });
 
+// ==================== PACKAGE A: PIN & BATCH MANAGEMENT ====================
+async function togglePinRecord(r: AccountRecord) {
+  r.is_pinned = !r.is_pinned;
+  try {
+    const saved = await invoke<AccountRecord>("save_record", { record: r });
+    const idx = records.value.findIndex((item) => item.id === saved.id);
+    if (idx >= 0) records.value[idx] = saved;
+    notify(saved.is_pinned ? `⭐ 已将 [${saved.email}] 设为星标置顶` : `已取消 [${saved.email}] 的星标置顶`, "info", 1800);
+    triggerDebouncedSync();
+  } catch (err: any) {
+    r.is_pinned = !r.is_pinned;
+    notify("置顶状态更新失败: " + err, "error");
+  }
+}
+
+const isBatchSelectMode = ref(false);
+const selectedBatchIds = ref<string[]>([]);
+const showBatchActionModal = ref(false);
+const batchActionType = ref<"group" | "status" | "one">("group");
+const batchTargetGroup = ref("");
+const batchTargetStatus = ref("正常");
+const batchTargetOneStatus = ref("active");
+const batchTargetOnePlan = ref("AI Premium");
+
+function toggleBatchSelectMode() {
+  isBatchSelectMode.value = !isBatchSelectMode.value;
+  selectedBatchIds.value = [];
+}
+
+function toggleSelectBatchItem(id: string) {
+  const idx = selectedBatchIds.value.indexOf(id);
+  if (idx >= 0) {
+    selectedBatchIds.value.splice(idx, 1);
+  } else {
+    selectedBatchIds.value.push(id);
+  }
+}
+
+const isAllFilteredSelected = computed(() => {
+  if (filteredRecords.value.length === 0) return false;
+  const set = new Set(selectedBatchIds.value);
+  return filteredRecords.value.every((r) => set.has(r.id));
+});
+
+function toggleSelectAllFiltered() {
+  if (isAllFilteredSelected.value) {
+    selectedBatchIds.value = [];
+  } else {
+    selectedBatchIds.value = filteredRecords.value.map((r) => r.id);
+  }
+}
+
+function openBatchUpdateDialog(type: "group" | "status" | "one") {
+  if (selectedBatchIds.value.length === 0) {
+    notify("请先勾选至少一个账号", "warning");
+    return;
+  }
+  batchActionType.value = type;
+  showBatchActionModal.value = true;
+}
+
+async function executeBatchUpdate() {
+  if (selectedBatchIds.value.length === 0) return;
+  try {
+    const count = selectedBatchIds.value.length;
+    const updated = await invoke<AccountRecord[]>("batch_update_records", {
+      ids: selectedBatchIds.value,
+      group: batchActionType.value === "group" ? batchTargetGroup.value : null,
+      status: batchActionType.value === "status" ? batchTargetStatus.value : null,
+      googleOneStatus: batchActionType.value === "one" ? batchTargetOneStatus.value : null,
+      googleOnePlan: batchActionType.value === "one" ? batchTargetOnePlan.value : null,
+      isPinned: null
+    });
+    records.value = updated;
+    showBatchActionModal.value = false;
+    notify(`✅ 已成功批量更新 ${count} 个账号`, "success");
+    triggerDebouncedSync();
+  } catch (err: any) {
+    notify("批量更新失败: " + err, "error");
+  }
+}
+
+async function executeBatchPin(pin: boolean) {
+  if (selectedBatchIds.value.length === 0) return;
+  try {
+    const count = selectedBatchIds.value.length;
+    const updated = await invoke<AccountRecord[]>("batch_update_records", {
+      ids: selectedBatchIds.value,
+      group: null,
+      status: null,
+      googleOneStatus: null,
+      googleOnePlan: null,
+      isPinned: pin
+    });
+    records.value = updated;
+    notify(pin ? `⭐ 已批量置顶 ${count} 个账号` : `已取消 ${count} 个账号的置顶`, "success");
+    triggerDebouncedSync();
+  } catch (err: any) {
+    notify("批量操作失败: " + err, "error");
+  }
+}
+
+function executeBatchExportSelected() {
+  if (selectedBatchIds.value.length === 0) return;
+  const idSet = new Set(selectedBatchIds.value);
+  const selectedList = records.value.filter((r) => idSet.has(r.id));
+  const header = "邮箱,登录密码,账号状态,分组,恢复邮箱,恢复手机,TOTP密钥,Google One状态,Google One方案,到期日期,独立代理,备用验证码,备注\n";
+  const rows = selectedList.map((r) => {
+    const fields = [
+      r.email || "",
+      r.password || "",
+      r.status || "待录入",
+      r.group || "",
+      r.recovery_email || "",
+      r.phone || "",
+      r.totp || "",
+      r.google_one_status || "",
+      r.google_one_plan || "",
+      r.expire_at || "",
+      r.proxy || "",
+      r.backup_codes || "",
+      r.notes || ""
+    ];
+    return fields.map((f) => `"${String(f).replace(/"/g, '""')}"`).join(",");
+  });
+  const csvContent = "\uFEFF" + header + rows.join("\n");
+  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `GoogleAccountVault_Selected_${selectedList.length}_${new Date().toISOString().slice(0, 10)}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+  notify(`已成功导出选中的 ${selectedList.length} 个账号为 CSV`, "success");
+}
+
+async function executeBatchDelete() {
+  if (selectedBatchIds.value.length === 0) return;
+  const count = selectedBatchIds.value.length;
+  const confirmed = await askConfirm({
+    title: "批量删除账号确认",
+    message: `确定要删除已勾选的 ${count} 个账号记录吗？删除前系统将自动为您保留本地历史快照备份。`,
+    type: "danger",
+    confirmText: `确认删除 (${count})`,
+    cancelText: "取消"
+  });
+  if (!confirmed) return;
+  try {
+    const remaining = await invoke<AccountRecord[]>("batch_delete_records", {
+      ids: selectedBatchIds.value
+    });
+    records.value = remaining;
+    if (selectedId.value && selectedBatchIds.value.includes(selectedId.value)) {
+      selectedId.value = null;
+      mobileView.value = "list";
+    }
+    selectedBatchIds.value = [];
+    isBatchSelectMode.value = false;
+    notify(`🗑️ 已安全删除 ${count} 个账号记录`, "info");
+    triggerDebouncedSync();
+  } catch (err: any) {
+    notify("批量删除失败: " + err, "error");
+  }
+}
+
+// ==================== PACKAGE B: AUTO-LOCK, CLIPBOARD CLEAR & MASTER PASSWORD ====================
+const autoLockMinutes = ref<number>(
+  localStorage.getItem("gvault_auto_lock_minutes") !== null
+    ? Number(localStorage.getItem("gvault_auto_lock_minutes"))
+    : 15
+);
+const clipboardClearSeconds = ref<number>(
+  localStorage.getItem("gvault_clipboard_clear_seconds") !== null
+    ? Number(localStorage.getItem("gvault_clipboard_clear_seconds"))
+    : 30
+);
+
+function setAutoLockMinutes(mins: number) {
+  autoLockMinutes.value = mins;
+  try {
+    localStorage.setItem("gvault_auto_lock_minutes", String(mins));
+  } catch (e) {}
+  lastActivityTime = Date.now();
+  notify(mins > 0 ? `已开启：无操作 ${mins} 分钟后自动锁定保险库` : "已关闭空闲自动锁定", "info", 2000);
+}
+
+function setClipboardClearSeconds(secs: number) {
+  clipboardClearSeconds.value = secs;
+  try {
+    localStorage.setItem("gvault_clipboard_clear_seconds", String(secs));
+  } catch (e) {}
+  notify(secs > 0 ? `已开启：复制敏感信息 ${secs} 秒后自动清空剪贴板` : "已关闭剪贴板自动清理", "info", 2000);
+}
+
+let lastActivityTime = Date.now();
+let idleLockCheckTimer: any = null;
+let clipboardClearTimer: any = null;
+
+function recordUserActivity() {
+  lastActivityTime = Date.now();
+}
+
+function scheduleClipboardClear() {
+  if (clipboardClearTimer) clearTimeout(clipboardClearTimer);
+  if (clipboardClearSeconds.value <= 0) return;
+  const delayMs = clipboardClearSeconds.value * 1000;
+  clipboardClearTimer = setTimeout(async () => {
+    try {
+      await navigator.clipboard.writeText("");
+    } catch (e) {}
+  }, delayMs);
+}
+
+// Change Master Password Modal State
+const showChangePwdModal = ref(false);
+const changePwdForm = ref({
+  oldPassword: "",
+  newPassword: "",
+  confirmPassword: ""
+});
+const isChangingPwd = ref(false);
+
+function openChangePwdModal() {
+  changePwdForm.value = { oldPassword: "", newPassword: "", confirmPassword: "" };
+  showChangePwdModal.value = true;
+}
+
+async function handleChangeMasterPassword() {
+  if (!changePwdForm.value.oldPassword || !changePwdForm.value.newPassword) {
+    notify("请完整填写原主密码与新主密码", "warning");
+    return;
+  }
+  if (changePwdForm.value.newPassword !== changePwdForm.value.confirmPassword) {
+    notify("两次输入的新主密码不一致，请核对", "error");
+    return;
+  }
+  if (changePwdForm.value.newPassword.length < 4) {
+    notify("新主密码长度至少需要 4 位", "warning");
+    return;
+  }
+
+  isChangingPwd.value = true;
+  try {
+    await invoke("change_master_password", {
+      oldPassword: changePwdForm.value.oldPassword,
+      newPassword: changePwdForm.value.newPassword
+    });
+    masterPassword.value = changePwdForm.value.newPassword;
+
+    // If mobile biometric was enrolled, clear old token so user can re-bind cleanly if needed
+    if (isMobilePlatform.value && helloStatus.value.enrolled) {
+      localStorage.removeItem("vault_mobile_biometric_token");
+      helloStatus.value.enrolled = false;
+    }
+
+    showChangePwdModal.value = false;
+    notify("🔐 主密码修改成功！本地保险库已使用新密钥重新加密保存", "success", 4000);
+
+    // If WebDAV auto-sync is enabled, push the newly encrypted vault to cloud
+    if (webdavForm.value.auto_sync && webdavForm.value.url.trim()) {
+      try {
+        await invoke("upload_webdav_vault", { config: webdavForm.value });
+      } catch (e) {}
+    }
+  } catch (err: any) {
+    notify("修改主密码失败: " + err, "error");
+  } finally {
+    isChangingPwd.value = false;
+  }
+}
+
+// 2FA QR Code Display & Image / URI Recognition
+const showTotpQrModal = ref(false);
+const totpQrData = ref<TotpQrResult | null>(null);
+
+async function openTotpQrModal(record: AccountRecord) {
+  if (!record.totp) return;
+  try {
+    totpQrData.value = await invoke<TotpQrResult>("get_totp_qr", {
+      secret: record.totp,
+      email: record.email
+    });
+    showTotpQrModal.value = true;
+  } catch (err: any) {
+    notify("生成 2FA 二维码失败: " + err, "error");
+  }
+}
+
+async function normalizeEditTotpSecret(rawText: string, sourceDesc = "2FA 密钥") {
+  try {
+    const cleanSecret = await invoke<string>("parse_totp_input", { raw: rawText });
+    editForm.value.totp = cleanSecret;
+    notify(`✅ 已成功解析并填入 ${sourceDesc} (${cleanSecret.slice(0, 4)}****)`, "success", 2800);
+  } catch (err: any) {
+    notify(`解析 ${sourceDesc} 失败: ` + err, "error");
+  }
+}
+
+function decodeQrFromImageFile(file: File) {
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    const img = new Image();
+    img.onload = async () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        notify("浏览器 Canvas 初始化失败", "error");
+        return;
+      }
+      ctx.drawImage(img, 0, 0);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const code = jsQR(imageData.data, imageData.width, imageData.height);
+      if (code && code.data) {
+        await normalizeEditTotpSecret(code.data, "二维码中的 2FA 密钥");
+      } else {
+        notify("未能在图片中识别到有效的二维码，请确保二维码清晰完整", "warning");
+      }
+    };
+    img.src = String(ev.target?.result || "");
+  };
+  reader.readAsDataURL(file);
+}
+
+function triggerScanQrImage() {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = "image/*";
+  input.onchange = (e: any) => {
+    const file = e.target?.files?.[0];
+    if (file) {
+      decodeQrFromImageFile(file);
+    }
+  };
+  input.click();
+}
+
+function handleTotpPaste(e: ClipboardEvent) {
+  const items = e.clipboardData?.items;
+  if (!items) return;
+  for (let i = 0; i < items.length; i++) {
+    if (items[i].type.startsWith("image/")) {
+      const file = items[i].getAsFile();
+      if (file) {
+        e.preventDefault();
+        decodeQrFromImageFile(file);
+        return;
+      }
+    }
+  }
+}
+
 // Copy Helper
 async function copyText(text: string, fieldKey: string, toastMsg = "已成功复制到剪贴板") {
   if (!text) return;
   await navigator.clipboard.writeText(text);
   copiedField.value = fieldKey;
-  notify(toastMsg, "success", 1800);
+  const suffix = clipboardClearSeconds.value > 0 ? ` (${clipboardClearSeconds.value}s 后自动清理)` : "";
+  notify(toastMsg + suffix, "success", 1800);
+  scheduleClipboardClear();
   setTimeout(() => {
     if (copiedField.value === fieldKey) copiedField.value = null;
   }, 2000);
@@ -582,6 +1146,9 @@ function openAddModal() {
     password: "",
     group: "",
     status: "待录入",
+    is_pinned: false,
+    expire_at: "",
+    proxy: "",
     recovery_email: "",
     phone: "",
     totp: "",
@@ -604,6 +1171,15 @@ function openEditModal(record: AccountRecord) {
   if (!editForm.value.status) {
     editForm.value.status = "待录入";
   }
+  if (editForm.value.is_pinned === undefined) {
+    editForm.value.is_pinned = false;
+  }
+  if (!editForm.value.expire_at) {
+    editForm.value.expire_at = "";
+  }
+  if (!editForm.value.proxy) {
+    editForm.value.proxy = "";
+  }
   isEditing.value = true;
 }
 
@@ -613,6 +1189,11 @@ async function handleSaveRecord() {
   if (!editForm.value.email.trim() || isSavingRecord.value) return;
   isSavingRecord.value = true;
   try {
+    if (editForm.value.totp && editForm.value.totp.trim().toLowerCase().startsWith("otpauth://")) {
+      try {
+        editForm.value.totp = await invoke<string>("parse_totp_input", { raw: editForm.value.totp });
+      } catch (_) {}
+    }
     const saved = await invoke<AccountRecord>("save_record", { record: editForm.value });
     const idx = records.value.findIndex((r) => r.id === saved.id);
     if (idx >= 0) {
@@ -664,12 +1245,15 @@ async function generatePassword() {
   }
 }
 
-// In-App Isolated Browser (Shape A)
+// In-App Isolated Browser (Shape A) & Custom Service Presets
 const isOpeningBrowser = ref(false);
 const showCustomUrlModal = ref(false);
 const customUrlInput = ref("https://");
+const isManagingPresets = ref(false);
+const newPresetName = ref("");
+const newPresetUrl = ref("https://");
 
-const servicePresets = [
+const defaultServicePresets = [
   { name: "Google 账号", url: "https://myaccount.google.com" },
   { name: "Gmail 邮箱", url: "https://mail.google.com" },
   { name: "Gemini 官网", url: "https://gemini.google.com" },
@@ -682,6 +1266,55 @@ const servicePresets = [
   { name: "服务条款与归属地", url: "https://policies.google.com/terms" },
 ];
 
+function loadSavedServicePresets(): Array<{ name: string; url: string }> {
+  try {
+    const raw = localStorage.getItem("gvault_custom_service_presets");
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    }
+  } catch (e) {}
+  return [...defaultServicePresets];
+}
+
+const servicePresets = ref<Array<{ name: string; url: string }>>(loadSavedServicePresets());
+
+function saveServicePresets() {
+  try {
+    localStorage.setItem("gvault_custom_service_presets", JSON.stringify(servicePresets.value));
+  } catch (e) {}
+}
+
+function addCustomServicePreset() {
+  const name = newPresetName.value.trim();
+  let url = newPresetUrl.value.trim();
+  if (!name || !url || url === "https://") {
+    notify("请输入快捷网站名称与完整网址", "warning");
+    return;
+  }
+  if (!url.startsWith("http://") && !url.startsWith("https://")) {
+    url = "https://" + url;
+  }
+  servicePresets.value.push({ name, url });
+  saveServicePresets();
+  newPresetName.value = "";
+  newPresetUrl.value = "https://";
+  notify(`已添加快捷网址：${name}`, "success", 1800);
+}
+
+function removeServicePreset(idx: number) {
+  servicePresets.value.splice(idx, 1);
+  saveServicePresets();
+}
+
+function resetDefaultServicePresets() {
+  servicePresets.value = [...defaultServicePresets];
+  saveServicePresets();
+  notify("已恢复默认常用服务列表", "info", 1800);
+}
+
 async function openInApp(url: string) {
   if (!selectedRecord.value) return;
   isOpeningBrowser.value = true;
@@ -691,6 +1324,7 @@ async function openInApp(url: string) {
       password: selectedRecord.value.password || "",
       totpSecret: selectedRecord.value.totp || "",
       recoveryEmail: selectedRecord.value.recovery_email || "",
+      proxy: selectedRecord.value.proxy || "",
       url
     });
   } catch (err: any) {
@@ -705,6 +1339,7 @@ async function openInApp(url: string) {
 
 function openCustomUrlModal() {
   customUrlInput.value = "https://";
+  isManagingPresets.value = false;
   showCustomUrlModal.value = true;
 }
 
@@ -1433,6 +2068,16 @@ async function loadBackupsList() {
   }
 }
 
+async function handleCreateManualBackup() {
+  try {
+    const info = await invoke<{ filename: string; timestamp: string; size_bytes: number }>("create_manual_vault_backup");
+    await loadBackupsList();
+    notify(`📸 已成功创建本地加密快照：${info.filename}`, "success", 3000);
+  } catch (err: any) {
+    notify("创建手动快照失败: " + err, "error");
+  }
+}
+
 async function handleRestoreBackup(filename: string) {
   const confirmed = await askConfirm({
     title: "回滚历史快照",
@@ -1585,7 +2230,9 @@ function applyPwdPreset(preset: "strong" | "alphanumeric" | "pin" | "max") {
 function copyGeneratedPassword() {
   if (!generatedPassword.value) return;
   navigator.clipboard.writeText(generatedPassword.value);
-  notify("已成功复制新密码到剪贴板！", "success");
+  scheduleClipboardClear();
+  const suffix = clipboardClearSeconds.value > 0 ? ` (${clipboardClearSeconds.value}s 后自动清理)` : "";
+  notify("已成功复制新密码到剪贴板！" + suffix, "success");
 }
 
 function applyPasswordToCurrentRecord() {
@@ -1622,6 +2269,24 @@ function handleBackAction(): boolean {
   // 1. Confirm dialog
   if (confirmState.value.visible) {
     confirmState.value.resolve(false);
+    return true;
+  }
+
+  // 1b. Change Master Password modal
+  if (showChangePwdModal.value) {
+    showChangePwdModal.value = false;
+    return true;
+  }
+
+  // 1c. 2FA QR modal
+  if (showTotpQrModal.value) {
+    showTotpQrModal.value = false;
+    return true;
+  }
+
+  // 1d. Batch Action modal
+  if (showBatchActionModal.value) {
+    showBatchActionModal.value = false;
     return true;
   }
 
@@ -1662,6 +2327,13 @@ function handleBackAction(): boolean {
   // 7. Account add/edit modal
   if (isEditing.value) {
     isEditing.value = false;
+    return true;
+  }
+
+  // 7b. Batch select mode active -> exit batch select mode
+  if (isBatchSelectMode.value) {
+    isBatchSelectMode.value = false;
+    selectedBatchIds.value = [];
     return true;
   }
 
@@ -1749,8 +2421,22 @@ onMounted(async () => {
   if (typeof window !== "undefined") {
     window.addEventListener("resize", updateWindowWidth);
     window.addEventListener("focus", handleWindowFocus);
+    window.addEventListener("mousemove", recordUserActivity, { passive: true });
+    window.addEventListener("mousedown", recordUserActivity, { passive: true });
+    window.addEventListener("keydown", recordUserActivity, { passive: true });
+    window.addEventListener("touchstart", recordUserActivity, { passive: true });
     updateWindowWidth();
   }
+
+  idleLockCheckTimer = setInterval(() => {
+    if (isUnlocked.value && autoLockMinutes.value > 0) {
+      const idleMs = Date.now() - lastActivityTime;
+      if (idleMs >= autoLockMinutes.value * 60 * 1000) {
+        lockVault();
+        notify(`🔒 已超过 ${autoLockMinutes.value} 分钟无操作，保险库已自动安全锁定`, "info", 4000);
+      }
+    }
+  }, 5000);
 
   syncIntervalTimer = setInterval(() => {
     if (isUnlocked.value && webdavForm.value.auto_sync) {
@@ -1780,11 +2466,17 @@ onMounted(async () => {
 onUnmounted(() => {
   if (totpTimer) clearInterval(totpTimer);
   if (syncIntervalTimer) clearInterval(syncIntervalTimer);
+  if (idleLockCheckTimer) clearInterval(idleLockCheckTimer);
   if (debouncedSyncTimer) clearTimeout(debouncedSyncTimer);
+  if (clipboardClearTimer) clearTimeout(clipboardClearTimer);
   if (typeof window !== "undefined") {
     window.removeEventListener("keydown", handleKeyDown);
     window.removeEventListener("resize", updateWindowWidth);
     window.removeEventListener("focus", handleWindowFocus);
+    window.removeEventListener("mousemove", recordUserActivity);
+    window.removeEventListener("mousedown", recordUserActivity);
+    window.removeEventListener("keydown", recordUserActivity);
+    window.removeEventListener("touchstart", recordUserActivity);
   }
   if (backButtonListener) {
     backButtonListener.unregister().catch(() => {});
@@ -1877,7 +2569,7 @@ onUnmounted(() => {
           </div>
           <div class="flex items-baseline gap-2">
             <span class="font-bold text-base text-[#202124] tracking-tight">Google 账号管家</span>
-            <span class="text-[11px] font-semibold uppercase px-2 py-0.5 bg-[#e8f0fe] text-[#1a73e8] rounded-full">v3.1.16</span>
+            <span class="text-[11px] font-semibold uppercase px-2 py-0.5 bg-[#e8f0fe] text-[#1a73e8] rounded-full">v3.1.17</span>
           </div>
         </div>
 
@@ -1987,11 +2679,11 @@ onUnmounted(() => {
         <!-- Mobile Main Nav Row -->
         <div class="h-13 px-3.5 flex items-center justify-between gap-2">
           <!-- Left: Brand -->
-          <div class="flex items-center gap-2 min-w-0">
+          <div class="flex items-center gap-2 flex-1 min-w-0 overflow-hidden">
             <div class="w-7 h-7 rounded-lg bg-white border border-[#dadce0]/60 flex items-center justify-center p-0.5 overflow-hidden shadow-2xs flex-shrink-0">
               <img src="/app.ico" alt="Logo" class="w-full h-full object-contain" />
             </div>
-            <span class="font-bold text-sm text-[#202124] tracking-tight whitespace-nowrap">Google 账号管家</span>
+            <span class="font-bold text-sm text-[#202124] tracking-tight truncate">Google 账号管家</span>
           </div>
 
           <!-- Right: Mobile Action Buttons -->
@@ -2004,16 +2696,6 @@ onUnmounted(() => {
               title="搜索"
             >
               <Search class="w-4 h-4" />
-            </button>
-
-            <!-- Quick Add Button -->
-            <button
-              @click="openAddModal"
-              class="h-8 px-2.5 bg-[#1a73e8] text-white rounded-full text-xs font-semibold flex items-center gap-1 shadow-xs active:bg-[#1557b0] transition-colors cursor-pointer"
-              title="添加新账号"
-            >
-              <Plus class="w-3.5 h-3.5" />
-              <span>添加</span>
             </button>
 
             <!-- Mobile Cloud Sync Button -->
@@ -2047,16 +2729,6 @@ onUnmounted(() => {
               ></span>
             </button>
 
-            <!-- Settings Button -->
-            <button
-              @click="openSettingsModal('security')"
-              class="w-8 h-8 rounded-full flex items-center justify-center text-[#5f6368] hover:bg-[#f1f3f4] active:bg-[#e8eaed] transition-colors relative cursor-pointer"
-              title="设置"
-            >
-              <Settings class="w-4 h-4 text-[#1a73e8]" />
-              <span v-if="helloStatus.enrolled" class="w-1.5 h-1.5 rounded-full bg-emerald-500 absolute top-1.5 right-1.5"></span>
-            </button>
-
             <!-- More Actions Dropdown Toggle -->
             <div class="relative">
               <button
@@ -2070,14 +2742,21 @@ onUnmounted(() => {
               <!-- More Actions Dropdown Menu -->
               <div
                 v-if="showMobileMoreMenu"
-                class="absolute right-0 top-10 w-44 bg-white rounded-2xl shadow-xl border border-[#dadce0] p-1.5 z-50 text-xs font-medium space-y-0.5 animate-fade-in"
+                class="absolute right-0 top-10 w-46 bg-white rounded-2xl shadow-xl border border-[#dadce0] p-1.5 z-50 text-xs font-medium space-y-0.5 animate-fade-in"
               >
                 <button
-                  @click="showMobileMoreMenu = false; triggerSmartSync(false)"
+                  @click="showMobileMoreMenu = false; openAddModal()"
+                  class="w-full px-3 py-2 text-left bg-[#e8f0fe]/70 hover:bg-[#e8f0fe] text-[#1a73e8] font-semibold rounded-xl flex items-center gap-2 cursor-pointer"
+                >
+                  <Plus class="w-3.5 h-3.5 text-[#1a73e8]" />
+                  <span>添加新账号</span>
+                </button>
+                <button
+                  @click="showMobileMoreMenu = false; openBatchImportModal()"
                   class="w-full px-3 py-2 text-left hover:bg-[#f1f3f4] rounded-xl flex items-center gap-2 text-[#3c4043] cursor-pointer"
                 >
-                  <Cloud class="w-3.5 h-3.5 text-[#1a73e8]" />
-                  <span>立即智能同步</span>
+                  <Upload class="w-3.5 h-3.5 text-[#1a73e8]" />
+                  <span>批量导入</span>
                 </button>
                 <button
                   @click="showMobileMoreMenu = false; openPasswordGenModal()"
@@ -2087,11 +2766,21 @@ onUnmounted(() => {
                   <span>密码生成器</span>
                 </button>
                 <button
-                  @click="showMobileMoreMenu = false; openBatchImportModal()"
+                  @click="showMobileMoreMenu = false; triggerSmartSync(false)"
                   class="w-full px-3 py-2 text-left hover:bg-[#f1f3f4] rounded-xl flex items-center gap-2 text-[#3c4043] cursor-pointer"
                 >
-                  <Upload class="w-3.5 h-3.5 text-[#1a73e8]" />
-                  <span>批量导入</span>
+                  <Cloud class="w-3.5 h-3.5 text-[#1a73e8]" />
+                  <span>立即智能同步</span>
+                </button>
+                <button
+                  @click="showMobileMoreMenu = false; openSettingsModal('security')"
+                  class="w-full px-3 py-2 text-left hover:bg-[#f1f3f4] rounded-xl flex items-center justify-between text-[#3c4043] cursor-pointer"
+                >
+                  <div class="flex items-center gap-2">
+                    <Settings class="w-3.5 h-3.5 text-[#1a73e8]" />
+                    <span>设置与偏好</span>
+                  </div>
+                  <span v-if="helloStatus.enrolled" class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
                 </button>
                 <div class="border-t border-[#f1f3f4] my-1"></div>
                 <button
@@ -2173,14 +2862,6 @@ onUnmounted(() => {
               <span class="text-[11px] text-[#5f6368] bg-black/5 px-2 py-0.5 rounded-full font-mono">{{ g.count }}</span>
             </button>
           </div>
-
-          <!-- Bottom Summary Box -->
-          <div class="p-3 border-t border-[#dadce0] bg-[#f8fafd]">
-            <div class="text-[11px] text-[#5f6368] space-y-1">
-              <div>已保存总数：<strong class="text-[#202124]">{{ records.length }}</strong> 个账号</div>
-              <div class="text-[10px] text-[#80868b]">AES-256-GCM 本地加密已就绪</div>
-            </div>
-          </div>
         </aside>
 
         <!-- COLUMN 2: MIDDLE ACCOUNT LIST -->
@@ -2191,47 +2872,373 @@ onUnmounted(() => {
             'md:flex md:flex-1'
           ]"
         >
-          <div class="px-3.5 py-1.5 bg-[#f8fafd] border-b border-[#dadce0] flex items-center justify-between text-xs text-[#5f6368]">
-            <div class="flex items-center gap-1.5 truncate">
-              <span>共 {{ filteredRecords.length }} 个账号</span>
-              <span class="text-[11px] text-[#80868b] hidden lg:inline">· 双击编辑</span>
+          <div class="px-3.5 py-1.5 bg-[#f8fafd] border-b border-[#dadce0] flex items-center justify-between text-xs text-[#5f6368] gap-2">
+            <div class="flex items-center gap-2 min-w-0 overflow-hidden">
+              <button
+                v-if="isBatchSelectMode"
+                type="button"
+                @click="toggleSelectAllFiltered"
+                class="px-2 py-0.5 bg-white hover:bg-[#e8f0fe] text-[#1a73e8] border border-[#1a73e8]/40 rounded-md text-[11px] font-semibold flex items-center gap-1 cursor-pointer transition-colors flex-shrink-0"
+              >
+                <CheckSquare v-if="isAllFilteredSelected" class="w-3 h-3" />
+                <Square v-else class="w-3 h-3" />
+                <span>{{ isAllFilteredSelected ? '取消全选' : '全选' }}</span>
+              </button>
+              <span class="truncate">{{ isBatchSelectMode ? `已选 ${selectedBatchIds.length}/${filteredRecords.length}` : `共 ${filteredRecords.length} 个账号` }}</span>
+              <span v-if="!isBatchSelectMode" class="text-[11px] text-[#80868b] hidden lg:inline flex-shrink-0">· 双击编辑</span>
             </div>
-            <!-- Quick Sort Mode Selector Switcher -->
-            <button
-              type="button"
-              @click="cycleSortRule"
-              class="px-2 py-0.5 bg-white hover:bg-[#e8eaed] text-[#3c4043] border border-[#dadce0]/80 rounded-md text-[11px] font-medium flex items-center gap-1 transition-all cursor-pointer shadow-2xs flex-shrink-0"
-              :title="`当前排序：${sortRuleLabel}，点击切换下一个排序规则`"
-            >
-              <ArrowUpDown class="w-3 h-3 text-[#1a73e8]" />
-              <span>{{ sortRuleLabel }}</span>
-            </button>
+
+            <div class="flex items-center gap-1.5 flex-shrink-0">
+              <!-- Multi-Attribute Filter Toggle -->
+              <button
+                type="button"
+                @click="showFilterPanel = !showFilterPanel"
+                :class="[
+                  'px-2 py-0.5 border rounded-md text-[11px] font-medium flex items-center gap-1 transition-all cursor-pointer shadow-2xs',
+                  showFilterPanel || activeFilterCount > 0
+                    ? 'bg-[#e8f0fe] text-[#1a73e8] border-[#1a73e8]/60 font-semibold'
+                    : 'bg-white hover:bg-[#e8eaed] text-[#3c4043] border-[#dadce0]/80'
+                ]"
+                title="按账号各项属性组合筛选"
+              >
+                <Filter class="w-3 h-3 text-[#1a73e8]" />
+                <span>筛选</span>
+                <span
+                  v-if="activeFilterCount > 0"
+                  class="px-1.2 py-0.2 bg-[#1a73e8] text-white rounded-full text-[9px] font-bold leading-none"
+                >
+                  {{ activeFilterCount }}
+                </span>
+              </button>
+
+              <!-- Batch Management Mode Toggle -->
+              <button
+                type="button"
+                @click="toggleBatchSelectMode"
+                :class="[
+                  'px-2 py-0.5 border rounded-md text-[11px] font-medium flex items-center gap-1 transition-all cursor-pointer shadow-2xs',
+                  isBatchSelectMode
+                    ? 'bg-[#1a73e8] text-white border-[#1a73e8]'
+                    : 'bg-white hover:bg-[#e8eaed] text-[#3c4043] border-[#dadce0]/80'
+                ]"
+                title="开启/退出批量多选管理模式"
+              >
+                <CheckSquare class="w-3 h-3" :class="isBatchSelectMode ? 'text-white' : 'text-[#1a73e8]'" />
+                <span>{{ isBatchSelectMode ? '退出批量' : '批量管理' }}</span>
+              </button>
+
+              <!-- Quick Sort Mode Selector Switcher -->
+              <button
+                type="button"
+                @click="cycleSortRule"
+                class="px-2 py-0.5 bg-white hover:bg-[#e8eaed] text-[#3c4043] border border-[#dadce0]/80 rounded-md text-[11px] font-medium flex items-center gap-1 transition-all cursor-pointer shadow-2xs"
+                :title="`当前排序：${sortRuleLabel}，点击切换下一个排序规则`"
+              >
+                <ArrowUpDown class="w-3 h-3 text-[#1a73e8]" />
+                <span>{{ sortRuleLabel }}</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Multi-Attribute Filter Collapsible Panel -->
+          <div
+            v-if="showFilterPanel"
+            class="px-3.5 py-2.5 bg-[#f8fafd] border-b border-[#dadce0] space-y-2.5 text-[11px] select-none flex-shrink-0 max-h-[55vh] overflow-y-auto"
+          >
+            <div class="flex items-center justify-between">
+              <div class="font-semibold text-[#202124] flex items-center gap-1.5">
+                <Filter class="w-3.5 h-3.5 text-[#1a73e8]" />
+                <span>多维属性组合筛选</span>
+                <span v-if="activeFilterCount > 0" class="text-[10px] text-[#1a73e8] font-normal">
+                  (已启用 {{ activeFilterCount }} 项条件)
+                </span>
+              </div>
+              <div class="flex items-center gap-2">
+                <button
+                  v-if="activeFilterCount > 0"
+                  type="button"
+                  @click="resetAttrFilter"
+                  class="px-2 py-0.5 bg-white hover:bg-rose-50 text-rose-600 border border-rose-200 rounded-md text-[10px] font-medium flex items-center gap-1 cursor-pointer transition-colors"
+                >
+                  <RotateCcw class="w-2.5 h-2.5" />
+                  <span>重置筛选</span>
+                </button>
+                <button
+                  type="button"
+                  @click="showFilterPanel = false"
+                  class="p-0.5 text-[#5f6368] hover:text-[#202124] rounded cursor-pointer"
+                  title="收起筛选面板"
+                >
+                  <X class="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+
+            <!-- 1. 账号状态 (Multi-select) -->
+            <div class="flex flex-wrap items-center gap-1.5">
+              <span class="text-[#5f6368] w-16 flex-shrink-0">账号状态：</span>
+              <button
+                type="button"
+                @click="attrFilter.statuses = []"
+                :class="[
+                  'px-2 py-0.5 rounded-md border text-[11px] cursor-pointer transition-all',
+                  attrFilter.statuses.length === 0
+                    ? 'bg-[#1a73e8] text-white border-[#1a73e8] font-medium'
+                    : 'bg-white text-[#5f6368] border-[#dadce0] hover:bg-[#f1f3f4]'
+                ]"
+              >
+                不限
+              </button>
+              <button
+                v-for="st in accountStatusOptions"
+                :key="st"
+                type="button"
+                @click="toggleAttrStatus(st)"
+                :class="[
+                  'px-2 py-0.5 rounded-md border text-[11px] cursor-pointer transition-all',
+                  attrFilter.statuses.includes(st)
+                    ? 'bg-[#e8f0fe] text-[#1a73e8] border-[#1a73e8] font-semibold'
+                    : 'bg-white text-[#5f6368] border-[#dadce0] hover:bg-[#f1f3f4]'
+                ]"
+              >
+                {{ st }}
+              </button>
+            </div>
+
+            <!-- 2. Google One 套餐 (Multi-select) -->
+            <div class="flex flex-wrap items-center gap-1.5">
+              <span class="text-[#5f6368] w-16 flex-shrink-0">One 套餐：</span>
+              <button
+                type="button"
+                @click="attrFilter.onePlans = []"
+                :class="[
+                  'px-2 py-0.5 rounded-md border text-[11px] cursor-pointer transition-all',
+                  attrFilter.onePlans.length === 0
+                    ? 'bg-[#1a73e8] text-white border-[#1a73e8] font-medium'
+                    : 'bg-white text-[#5f6368] border-[#dadce0] hover:bg-[#f1f3f4]'
+                ]"
+              >
+                不限
+              </button>
+              <button
+                v-for="plan in googleOnePlanOptions"
+                :key="plan"
+                type="button"
+                @click="toggleAttrOnePlan(plan)"
+                :class="[
+                  'px-2 py-0.5 rounded-md border text-[11px] cursor-pointer transition-all',
+                  attrFilter.onePlans.includes(plan)
+                    ? 'bg-[#e8f0fe] text-[#1a73e8] border-[#1a73e8] font-semibold'
+                    : 'bg-white text-[#5f6368] border-[#dadce0] hover:bg-[#f1f3f4]'
+                ]"
+              >
+                {{ plan }}
+              </button>
+            </div>
+
+            <!-- 3. 2FA 密钥 & 备用码 -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div class="flex flex-wrap items-center gap-1">
+                <span class="text-[#5f6368] w-16 flex-shrink-0">2FA 密钥：</span>
+                <button
+                  v-for="opt in [
+                    { k: 'all', l: '不限' },
+                    { k: 'yes', l: '已绑 2FA' },
+                    { k: 'no', l: '未绑 2FA' }
+                  ]"
+                  :key="opt.k"
+                  type="button"
+                  @click="attrFilter.totp = opt.k as any"
+                  :class="[
+                    'px-2 py-0.5 rounded-md border text-[11px] cursor-pointer transition-all',
+                    attrFilter.totp === opt.k
+                      ? 'bg-[#1a73e8] text-white border-[#1a73e8] font-medium'
+                      : 'bg-white text-[#5f6368] border-[#dadce0] hover:bg-[#f1f3f4]'
+                  ]"
+                >
+                  {{ opt.l }}
+                </button>
+              </div>
+
+              <div class="flex flex-wrap items-center gap-1">
+                <span class="text-[#5f6368] w-16 flex-shrink-0">备用验证码：</span>
+                <button
+                  v-for="opt in [
+                    { k: 'all', l: '不限' },
+                    { k: 'yes', l: '有可用码' },
+                    { k: 'no', l: '无/已耗尽' }
+                  ]"
+                  :key="opt.k"
+                  type="button"
+                  @click="attrFilter.backupCodes = opt.k as any"
+                  :class="[
+                    'px-2 py-0.5 rounded-md border text-[11px] cursor-pointer transition-all',
+                    attrFilter.backupCodes === opt.k
+                      ? 'bg-[#1a73e8] text-white border-[#1a73e8] font-medium'
+                      : 'bg-white text-[#5f6368] border-[#dadce0] hover:bg-[#f1f3f4]'
+                  ]"
+                >
+                  {{ opt.l }}
+                </button>
+              </div>
+            </div>
+
+            <!-- 4. 辅助邮箱 & 绑定手机 -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div class="flex flex-wrap items-center gap-1">
+                <span class="text-[#5f6368] w-16 flex-shrink-0">辅助邮箱：</span>
+                <button
+                  v-for="opt in [
+                    { k: 'all', l: '不限' },
+                    { k: 'yes', l: '已设置' },
+                    { k: 'no', l: '未设置' }
+                  ]"
+                  :key="opt.k"
+                  type="button"
+                  @click="attrFilter.recoveryEmail = opt.k as any"
+                  :class="[
+                    'px-2 py-0.5 rounded-md border text-[11px] cursor-pointer transition-all',
+                    attrFilter.recoveryEmail === opt.k
+                      ? 'bg-[#1a73e8] text-white border-[#1a73e8] font-medium'
+                      : 'bg-white text-[#5f6368] border-[#dadce0] hover:bg-[#f1f3f4]'
+                  ]"
+                >
+                  {{ opt.l }}
+                </button>
+              </div>
+
+              <div class="flex flex-wrap items-center gap-1">
+                <span class="text-[#5f6368] w-16 flex-shrink-0">绑定手机：</span>
+                <button
+                  v-for="opt in [
+                    { k: 'all', l: '不限' },
+                    { k: 'yes', l: '已绑定' },
+                    { k: 'no', l: '未绑定' }
+                  ]"
+                  :key="opt.k"
+                  type="button"
+                  @click="attrFilter.phone = opt.k as any"
+                  :class="[
+                    'px-2 py-0.5 rounded-md border text-[11px] cursor-pointer transition-all',
+                    attrFilter.phone === opt.k
+                      ? 'bg-[#1a73e8] text-white border-[#1a73e8] font-medium'
+                      : 'bg-white text-[#5f6368] border-[#dadce0] hover:bg-[#f1f3f4]'
+                  ]"
+                >
+                  {{ opt.l }}
+                </button>
+              </div>
+            </div>
+
+            <!-- 5. 独立代理 & 到期状态 -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div class="flex flex-wrap items-center gap-1">
+                <span class="text-[#5f6368] w-16 flex-shrink-0">独立代理：</span>
+                <button
+                  v-for="opt in [
+                    { k: 'all', l: '不限' },
+                    { k: 'yes', l: '已配代理' },
+                    { k: 'no', l: '直连(未配)' }
+                  ]"
+                  :key="opt.k"
+                  type="button"
+                  @click="attrFilter.proxy = opt.k as any"
+                  :class="[
+                    'px-2 py-0.5 rounded-md border text-[11px] cursor-pointer transition-all',
+                    attrFilter.proxy === opt.k
+                      ? 'bg-[#1a73e8] text-white border-[#1a73e8] font-medium'
+                      : 'bg-white text-[#5f6368] border-[#dadce0] hover:bg-[#f1f3f4]'
+                  ]"
+                >
+                  {{ opt.l }}
+                </button>
+              </div>
+
+              <div class="flex flex-wrap items-center gap-1">
+                <span class="text-[#5f6368] w-16 flex-shrink-0">到期状态：</span>
+                <button
+                  v-for="opt in [
+                    { k: 'all', l: '不限' },
+                    { k: 'expired', l: '已过期' },
+                    { k: 'soon7', l: '7天内' },
+                    { k: 'soon30', l: '30天内' },
+                    { k: 'has_date', l: '有到期日' },
+                    { k: 'no_date', l: '长期/未设' }
+                  ]"
+                  :key="opt.k"
+                  type="button"
+                  @click="attrFilter.expire = opt.k as any"
+                  :class="[
+                    'px-2 py-0.5 rounded-md border text-[11px] cursor-pointer transition-all',
+                    attrFilter.expire === opt.k
+                      ? 'bg-[#1a73e8] text-white border-[#1a73e8] font-medium'
+                      : 'bg-white text-[#5f6368] border-[#dadce0] hover:bg-[#f1f3f4]'
+                  ]"
+                >
+                  {{ opt.l }}
+                </button>
+              </div>
+            </div>
           </div>
 
           <div class="flex-1 overflow-y-auto divide-y divide-[#f1f3f4]" @click.self="selectedId = null">
             <div
               v-for="r in filteredRecords"
               :key="r.id"
-              @click="selectAccount(r.id)"
+              @click="isBatchSelectMode ? toggleSelectBatchItem(r.id) : selectAccount(r.id)"
               @dblclick="openEditModal(r)"
               :class="[
                 'px-4 py-3 flex items-center justify-between cursor-pointer transition-colors',
-                selectedId === r.id ? 'bg-[#edf2fa]' : 'hover:bg-[#f8fafd]'
+                isBatchSelectMode && selectedBatchIds.includes(r.id)
+                  ? 'bg-[#e8f0fe]/70'
+                  : selectedId === r.id
+                  ? 'bg-[#edf2fa]'
+                  : r.is_pinned
+                  ? 'bg-amber-50/25 hover:bg-amber-50/50'
+                  : 'hover:bg-[#f8fafd]'
               ]"
             >
-              <!-- Left: Avatar + Email + Group -->
-              <div class="flex items-center gap-3 min-w-0">
-                <div class="w-9 h-9 rounded-full bg-[#e8f0fe] text-[#1a73e8] font-bold text-sm flex items-center justify-center flex-shrink-0">
+              <!-- Left: Checkbox / Star + Avatar + Email + Group -->
+              <div class="flex items-center gap-2.5 min-w-0">
+                <!-- Batch Checkbox -->
+                <button
+                  v-if="isBatchSelectMode"
+                  type="button"
+                  @click.stop="toggleSelectBatchItem(r.id)"
+                  class="text-[#1a73e8] flex-shrink-0 cursor-pointer"
+                >
+                  <CheckSquare v-if="selectedBatchIds.includes(r.id)" class="w-4 h-4 text-[#1a73e8]" />
+                  <Square v-else class="w-4 h-4 text-[#80868b]" />
+                </button>
+
+                <!-- Star Pin Button -->
+                <button
+                  type="button"
+                  @click.stop="togglePinRecord(r)"
+                  class="p-1 rounded-full hover:bg-black/5 transition-colors flex-shrink-0 cursor-pointer"
+                  :title="r.is_pinned ? '取消星标置顶' : '设为星标置顶 (固定在列表顶部)'"
+                >
+                  <Star
+                    class="w-3.5 h-3.5 transition-colors"
+                    :class="r.is_pinned ? 'text-amber-400 fill-amber-400' : 'text-[#dadce0] hover:text-amber-400'"
+                  />
+                </button>
+
+                <div class="w-9 h-9 rounded-full bg-[#e8f0fe] text-[#1a73e8] font-bold text-sm flex items-center justify-center flex-shrink-0 relative">
                   {{ (r.email[0] || 'G').toUpperCase() }}
                 </div>
                 <div class="min-w-0">
-                  <div class="text-xs font-semibold text-[#202124] truncate flex items-center gap-1.5">
+                  <div class="text-xs font-semibold text-[#202124] truncate flex items-center gap-1.5 flex-wrap">
                     <span class="truncate">{{ r.email }}</span>
                     <span :class="getStatusBadgeClass(r.status)">{{ r.status || '待录入' }}</span>
+                    <span v-if="r.expire_at && getExpireBadge(r.expire_at)" :class="getExpireBadge(r.expire_at)?.class">
+                      {{ getExpireBadge(r.expire_at)?.label }}
+                    </span>
                   </div>
-                  <div class="text-[11px] text-[#5f6368] flex items-center gap-2 mt-0.5">
+                  <div class="text-[11px] text-[#5f6368] flex items-center gap-2 mt-0.5 flex-wrap">
                     <span v-if="r.group" class="px-1.5 py-0.2 bg-[#f1f3f4] text-[#444746] rounded text-[10px]">{{ r.group }}</span>
                     <span v-if="r.google_one_plan" class="px-1.5 py-0.2 bg-[#e8f0fe] text-[#1a73e8] rounded text-[10px] font-mono">{{ r.google_one_plan }}</span>
+                    <span v-if="r.proxy" class="px-1.5 py-0.2 bg-purple-50 text-purple-700 border border-purple-200 rounded text-[10px] font-mono" :title="`独立代理: ${r.proxy}`">独立IP</span>
                     <span v-if="r.recovery_email" class="truncate">{{ r.recovery_email }}</span>
                   </div>
                 </div>
@@ -2284,15 +3291,83 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <div v-if="filteredRecords.length === 0" class="p-8 text-center text-xs text-[#80868b]">
-              暂无匹配的账号记录
+            <div v-if="filteredRecords.length === 0" class="p-8 text-center text-xs text-[#80868b] space-y-2">
+              <div>暂无匹配的账号记录</div>
+              <button
+                v-if="activeFilterCount > 0 || searchQuery"
+                type="button"
+                @click="resetAttrFilter(); searchQuery = ''"
+                class="px-3 py-1 bg-[#e8f0fe] hover:bg-[#d2e3fc] text-[#1a73e8] rounded-lg text-[11px] font-medium cursor-pointer transition-colors"
+              >
+                清除全部筛选与搜索条件
+              </button>
             </div>
           </div>
 
-          <!-- Mobile Bottom Summary Bar -->
-          <div class="md:hidden px-4 py-2.5 bg-[#f8fafd] border-t border-[#dadce0] text-[11px] text-[#5f6368] flex items-center justify-between flex-shrink-0">
-            <span>已保存 <strong>{{ records.length }}</strong> 个账号</span>
-            <span class="text-[10px] text-[#80868b]">AES-256-GCM 本地加密就绪</span>
+          <!-- Batch Action Bottom Toolbar -->
+          <div
+            v-if="isBatchSelectMode"
+            class="px-3 py-2 bg-[#edf2fa] border-t border-[#1a73e8]/30 flex flex-wrap items-center justify-between gap-2 flex-shrink-0"
+          >
+            <span class="text-xs font-semibold text-[#1a73e8]">
+              已选 {{ selectedBatchIds.length }} 项
+            </span>
+            <div class="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                @click="executeBatchPin(true)"
+                :disabled="selectedBatchIds.length === 0"
+                class="px-2.5 py-1 bg-white hover:bg-amber-50 text-[#3c4043] border border-[#dadce0] rounded-lg text-[11px] font-medium flex items-center gap-1 disabled:opacity-50 cursor-pointer"
+              >
+                <Star class="w-3 h-3 text-amber-500 fill-amber-400" />
+                <span>置顶</span>
+              </button>
+              <button
+                type="button"
+                @click="openBatchUpdateDialog('group')"
+                :disabled="selectedBatchIds.length === 0"
+                class="px-2.5 py-1 bg-white hover:bg-[#e8f0fe] text-[#3c4043] border border-[#dadce0] rounded-lg text-[11px] font-medium flex items-center gap-1 disabled:opacity-50 cursor-pointer"
+              >
+                <Folder class="w-3 h-3 text-[#1a73e8]" />
+                <span>改分组</span>
+              </button>
+              <button
+                type="button"
+                @click="openBatchUpdateDialog('status')"
+                :disabled="selectedBatchIds.length === 0"
+                class="px-2.5 py-1 bg-white hover:bg-[#e8f0fe] text-[#3c4043] border border-[#dadce0] rounded-lg text-[11px] font-medium flex items-center gap-1 disabled:opacity-50 cursor-pointer"
+              >
+                <Edit3 class="w-3 h-3 text-[#1a73e8]" />
+                <span>改状态</span>
+              </button>
+              <button
+                type="button"
+                @click="openBatchUpdateDialog('one')"
+                :disabled="selectedBatchIds.length === 0"
+                class="px-2.5 py-1 bg-white hover:bg-[#e8f0fe] text-[#3c4043] border border-[#dadce0] rounded-lg text-[11px] font-medium flex items-center gap-1 disabled:opacity-50 cursor-pointer"
+              >
+                <Sparkles class="w-3 h-3 text-[#1a73e8]" />
+                <span>改One订阅</span>
+              </button>
+              <button
+                type="button"
+                @click="executeBatchExportSelected"
+                :disabled="selectedBatchIds.length === 0"
+                class="px-2.5 py-1 bg-white hover:bg-[#e8f0fe] text-[#3c4043] border border-[#dadce0] rounded-lg text-[11px] font-medium flex items-center gap-1 disabled:opacity-50 cursor-pointer"
+              >
+                <Download class="w-3 h-3 text-[#1a73e8]" />
+                <span>导出选中</span>
+              </button>
+              <button
+                type="button"
+                @click="executeBatchDelete"
+                :disabled="selectedBatchIds.length === 0"
+                class="px-2.5 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-[11px] font-medium flex items-center gap-1 disabled:opacity-50 cursor-pointer"
+              >
+                <Trash2 class="w-3 h-3" />
+                <span>批量删除</span>
+              </button>
+            </div>
           </div>
         </main>
 
@@ -2355,6 +3430,17 @@ onUnmounted(() => {
                   <div class="flex items-center justify-between gap-1.5">
                     <div class="text-[11px] text-[#5f6368]">Google 账号</div>
                     <div class="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        @click="togglePinRecord(selectedRecord)"
+                        class="p-0.5 rounded hover:bg-[#f1f3f4] transition-colors cursor-pointer"
+                        :title="selectedRecord.is_pinned ? '取消星标置顶' : '设为星标置顶'"
+                      >
+                        <Star
+                          class="w-3.5 h-3.5"
+                          :class="selectedRecord.is_pinned ? 'text-amber-400 fill-amber-400' : 'text-[#80868b] hover:text-amber-400'"
+                        />
+                      </button>
                       <span :class="getStatusBadgeClass(selectedRecord.status)">{{ selectedRecord.status || '待录入' }}</span>
                       <button
                         @click="selectedId = null"
@@ -2479,6 +3565,23 @@ onUnmounted(() => {
                 <div class="text-[#202124] font-medium truncate">
                   {{ selectedRecord.google_one_plan ? (selectedRecord.google_one_plan + (selectedRecord.google_one_used ? ' (' + selectedRecord.google_one_used + ')' : '')) : '—' }}
                 </div>
+
+                <template v-if="selectedRecord.expire_at">
+                  <div class="text-[#5f6368]">到期时间</div>
+                  <div class="flex items-center gap-1.5 flex-wrap">
+                    <span class="font-mono text-[#202124]">{{ selectedRecord.expire_at }}</span>
+                    <span v-if="getExpireBadge(selectedRecord.expire_at)" :class="getExpireBadge(selectedRecord.expire_at)?.class">
+                      {{ getExpireBadge(selectedRecord.expire_at)?.label }}
+                    </span>
+                  </div>
+                </template>
+
+                <template v-if="selectedRecord.proxy">
+                  <div class="text-[#5f6368]">独立代理</div>
+                  <div class="font-mono text-[11px] text-purple-700 truncate" :title="selectedRecord.proxy">
+                    {{ selectedRecord.proxy }}
+                  </div>
+                </template>
               </div>
 
               <!-- Notes -->
@@ -2502,15 +3605,26 @@ onUnmounted(() => {
                 <div class="font-mono text-2xl font-black tracking-widest text-[#1a73e8]">
                   {{ totpMap[selectedRecord.id]?.code || "未配置" }}
                 </div>
-                <button
-                  v-if="selectedRecord.totp"
-                  @click="copyText(totpMap[selectedRecord.id]?.code || '', 'totp_large')"
-                  class="px-2.5 py-1 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium flex items-center gap-1 shadow-2xs transition-all cursor-pointer"
-                >
-                  <Check v-if="copiedField === 'totp_large'" class="w-3.5 h-3.5" />
-                  <Copy v-else class="w-3.5 h-3.5" />
-                  <span>{{ copiedField === 'totp_large' ? '已复制' : '复制' }}</span>
-                </button>
+                <div v-if="selectedRecord.totp" class="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    @click="openTotpQrModal(selectedRecord)"
+                    class="px-2 py-1 bg-white hover:bg-[#e8f0fe] text-[#1a73e8] border border-[#1a73e8]/30 rounded-xl text-xs font-medium flex items-center gap-1 shadow-2xs transition-all cursor-pointer"
+                    title="显示 2FA 转移二维码，方便用手机验证器扫码备份"
+                  >
+                    <QrCode class="w-3.5 h-3.5" />
+                    <span>二维码</span>
+                  </button>
+                  <button
+                    type="button"
+                    @click="copyText(totpMap[selectedRecord.id]?.code || '', 'totp_large')"
+                    class="px-2.5 py-1 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium flex items-center gap-1 shadow-2xs transition-all cursor-pointer"
+                  >
+                    <Check v-if="copiedField === 'totp_large'" class="w-3.5 h-3.5" />
+                    <Copy v-else class="w-3.5 h-3.5" />
+                    <span>{{ copiedField === 'totp_large' ? '已复制' : '复制' }}</span>
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -2620,7 +3734,18 @@ onUnmounted(() => {
 
         <form @submit.prevent="handleSaveRecord" class="flex-1 overflow-y-auto space-y-4 pr-1">
           <div>
-            <label class="block text-xs font-semibold text-[#5f6368] mb-1">Google 邮箱 *</label>
+            <div class="flex items-center justify-between mb-1">
+              <label class="block text-xs font-semibold text-[#5f6368]">Google 邮箱 *</label>
+              <label class="flex items-center gap-1.5 text-xs font-medium text-[#3c4043] cursor-pointer">
+                <input
+                  type="checkbox"
+                  v-model="editForm.is_pinned"
+                  class="rounded text-amber-500 focus:ring-0 cursor-pointer"
+                />
+                <Star class="w-3.5 h-3.5" :class="editForm.is_pinned ? 'text-amber-400 fill-amber-400' : 'text-[#80868b]'" />
+                <span>设为星标置顶</span>
+              </label>
+            </div>
             <input
               type="email"
               required
@@ -2693,13 +3818,51 @@ onUnmounted(() => {
           </div>
 
           <div>
-            <label class="block text-xs font-semibold text-[#5f6368] mb-1">2FA 密钥 (Base32 或 otpauth://)</label>
+            <div class="flex items-center justify-between mb-1">
+              <label class="block text-xs font-semibold text-[#5f6368]">2FA 密钥 (Base32 / otpauth:// / 粘贴二维码截图)</label>
+              <button
+                type="button"
+                @click="triggerScanQrImage"
+                class="text-[11px] text-[#1a73e8] hover:underline flex items-center gap-1 cursor-pointer"
+                title="选择二维码截图自动识别并提取 2FA 密钥"
+              >
+                <QrCode class="w-3 h-3" />
+                <span>识别二维码图片</span>
+              </button>
+            </div>
             <input
               type="text"
               v-model="editForm.totp"
-              placeholder="JBSWY3DPEHPK3PXP..."
+              @paste="handleTotpPaste"
+              placeholder="JBSWY3DPEHPK3PXP 或直接 Ctrl+V 粘贴二维码图片..."
               class="w-full px-3 py-2 bg-[#f1f3f4] focus:bg-white rounded-xl border border-transparent focus:border-[#1a73e8] text-xs outline-none font-mono"
             />
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs font-semibold text-[#5f6368] mb-1 flex items-center gap-1">
+                <Calendar class="w-3 h-3 text-[#1a73e8]" />
+                <span>订阅/权益到期日 (可选)</span>
+              </label>
+              <input
+                type="date"
+                v-model="editForm.expire_at"
+                class="w-full px-3 py-2 bg-[#f1f3f4] focus:bg-white rounded-xl border border-transparent focus:border-[#1a73e8] text-xs outline-none font-mono"
+              />
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-[#5f6368] mb-1 flex items-center gap-1">
+                <Network class="w-3 h-3 text-[#1a73e8]" />
+                <span>独立代理 IP (可选，防关联)</span>
+              </label>
+              <input
+                type="text"
+                v-model="editForm.proxy"
+                placeholder="http://127.0.0.1:7890 或 socks5://..."
+                class="w-full px-3 py-2 bg-[#f1f3f4] focus:bg-white rounded-xl border border-transparent focus:border-[#1a73e8] text-xs outline-none font-mono"
+              />
+            </div>
           </div>
 
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -2788,17 +3951,77 @@ onUnmounted(() => {
 
         <!-- Quick Presets -->
         <div class="mb-4">
-          <label class="block text-xs font-semibold text-[#5f6368] mb-2 uppercase tracking-wider">常用服务直达</label>
+          <div class="flex items-center justify-between mb-2">
+            <label class="block text-xs font-semibold text-[#5f6368] uppercase tracking-wider">常用服务直达</label>
+            <div class="flex items-center gap-2">
+              <button
+                v-if="isManagingPresets"
+                type="button"
+                @click="resetDefaultServicePresets"
+                class="text-[11px] text-[#5f6368] hover:text-[#1a73e8] cursor-pointer"
+              >
+                恢复默认
+              </button>
+              <button
+                type="button"
+                @click="isManagingPresets = !isManagingPresets"
+                class="text-[11px] text-[#1a73e8] hover:underline font-medium cursor-pointer"
+              >
+                {{ isManagingPresets ? "完成管理" : "自定义管理" }}
+              </button>
+            </div>
+          </div>
+
           <div class="grid grid-cols-2 gap-2">
-            <button
-              v-for="p in servicePresets"
-              :key="p.url"
-              type="button"
-              @click="showCustomUrlModal = false; openInApp(p.url)"
-              class="px-3 py-2 bg-[#f8fafd] hover:bg-[#e8f0fe] hover:text-[#1a73e8] border border-[#dadce0]/60 rounded-xl text-xs font-medium text-[#3c4043] flex items-center justify-between transition-colors text-left"
+            <div
+              v-for="(p, idx) in servicePresets"
+              :key="p.url + idx"
+              class="relative flex items-center"
             >
-              <span>{{ p.name }}</span>
-              <ExternalLink class="w-3 h-3 text-[#5f6368]" />
+              <button
+                type="button"
+                @click="!isManagingPresets && (showCustomUrlModal = false, openInApp(p.url))"
+                class="w-full px-3 py-2 bg-[#f8fafd] hover:bg-[#e8f0fe] hover:text-[#1a73e8] border border-[#dadce0]/60 rounded-xl text-xs font-medium text-[#3c4043] flex items-center justify-between transition-colors text-left truncate cursor-pointer"
+                :title="p.url"
+              >
+                <span class="truncate pr-2">{{ p.name }}</span>
+                <ExternalLink v-if="!isManagingPresets" class="w-3 h-3 text-[#5f6368] flex-shrink-0" />
+              </button>
+              <button
+                v-if="isManagingPresets"
+                type="button"
+                @click.stop="removeServicePreset(idx)"
+                class="absolute right-1.5 p-1 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-lg transition-colors cursor-pointer"
+                title="删除此快捷网址"
+              >
+                <Trash2 class="w-3 h-3" />
+              </button>
+            </div>
+          </div>
+
+          <!-- Add New Preset Form -->
+          <div v-if="isManagingPresets" class="mt-3 p-3 bg-[#f8fafd] rounded-2xl border border-[#dadce0] space-y-2">
+            <div class="text-[11px] font-semibold text-[#202124]">新增自定义常用网址</div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <input
+                type="text"
+                v-model="newPresetName"
+                placeholder="名称 (如 Colab / Cursor)"
+                class="px-2.5 py-1.5 bg-white rounded-lg border border-[#dadce0] text-xs outline-none focus:border-[#1a73e8]"
+              />
+              <input
+                type="text"
+                v-model="newPresetUrl"
+                placeholder="https://..."
+                class="px-2.5 py-1.5 bg-white rounded-lg border border-[#dadce0] text-xs outline-none font-mono focus:border-[#1a73e8]"
+              />
+            </div>
+            <button
+              type="button"
+              @click="addCustomServicePreset"
+              class="w-full py-1.5 bg-[#e8f0fe] hover:bg-[#d2e3fc] text-[#1a73e8] rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+            >
+              + 添加到常用服务列表
             </button>
           </div>
         </div>
@@ -3355,15 +4578,94 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <!-- Master Password Encryption Architecture -->
-            <div class="p-3.5 sm:p-4 bg-[#f8fafd] rounded-2xl border border-[#dadce0] space-y-2">
-              <h3 class="text-xs font-bold text-[#202124] flex items-center gap-2">
-                <Lock class="w-4 h-4 text-[#1a73e8] flex-shrink-0" />
-                <span>主密码与本地加密体系</span>
-              </h3>
-              <p class="text-[11px] text-[#5f6368] leading-relaxed">
-                当前安全库所有账号数据使用 <b>AES-256-GCM</b> 强加密，密钥派生采用 <b>Scrypt (N=32768, r=8, p=1)</b> 算法。数据绝无任何明文落盘，主密码本身也不存储于任何文件。请务必牢记主密码。
-              </p>
+            <!-- Idle Auto-Lock & Clipboard Auto-Clear Card (Package B) -->
+            <div class="p-3.5 sm:p-4 bg-[#f8fafd] rounded-2xl border border-[#dadce0] space-y-3.5">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-white border border-[#dadce0]/70 flex items-center justify-center text-[#1a73e8] shadow-xs flex-shrink-0">
+                  <Clock class="w-5 h-5" />
+                </div>
+                <div class="flex-1 min-w-0">
+                  <h3 class="text-xs font-bold text-[#202124]">空闲自动锁定 & 剪贴板自动清理</h3>
+                  <p class="text-[11px] text-[#5f6368] mt-0.5">
+                    离开电脑或手机时自动锁定保险库，复制密码或验证码后自动销毁剪贴板残留
+                  </p>
+                </div>
+              </div>
+
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                <!-- Idle Auto Lock Selector -->
+                <div class="p-3 bg-white rounded-xl border border-[#dadce0]/80 space-y-2">
+                  <div class="flex items-center justify-between text-xs">
+                    <span class="font-bold text-[#202124]">无操作自动锁定</span>
+                    <span class="text-[11px] font-semibold text-[#1a73e8]">
+                      {{ autoLockMinutes > 0 ? `${autoLockMinutes} 分钟` : '不自动锁定' }}
+                    </span>
+                  </div>
+                  <div class="flex flex-wrap gap-1.5">
+                    <button
+                      v-for="m in [0, 5, 15, 30, 60]"
+                      :key="m"
+                      type="button"
+                      @click="setAutoLockMinutes(m)"
+                      :class="[
+                        'px-2.5 py-1 rounded-lg text-[11px] font-medium border transition-all cursor-pointer',
+                        autoLockMinutes === m
+                          ? 'bg-[#1a73e8] text-white border-[#1a73e8] font-semibold'
+                          : 'bg-[#f8fafd] text-[#5f6368] border-[#dadce0] hover:border-[#1a73e8]/60'
+                      ]"
+                    >
+                      {{ m === 0 ? '关闭' : `${m}分` }}
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Clipboard Auto Clear Selector -->
+                <div class="p-3 bg-white rounded-xl border border-[#dadce0]/80 space-y-2">
+                  <div class="flex items-center justify-between text-xs">
+                    <span class="font-bold text-[#202124]">剪贴板自动清空</span>
+                    <span class="text-[11px] font-semibold text-[#1a73e8]">
+                      {{ clipboardClearSeconds > 0 ? `${clipboardClearSeconds} 秒后清空` : '不自动清空' }}
+                    </span>
+                  </div>
+                  <div class="flex flex-wrap gap-1.5">
+                    <button
+                      v-for="s in [0, 15, 30, 60]"
+                      :key="s"
+                      type="button"
+                      @click="setClipboardClearSeconds(s)"
+                      :class="[
+                        'px-2.5 py-1 rounded-lg text-[11px] font-medium border transition-all cursor-pointer',
+                        clipboardClearSeconds === s
+                          ? 'bg-[#1a73e8] text-white border-[#1a73e8] font-semibold'
+                          : 'bg-[#f8fafd] text-[#5f6368] border-[#dadce0] hover:border-[#1a73e8]/60'
+                      ]"
+                    >
+                      {{ s === 0 ? '关闭' : `${s}秒` }}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Master Password Encryption Architecture & Change Password -->
+            <div class="p-3.5 sm:p-4 bg-[#f8fafd] rounded-2xl border border-[#dadce0] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div class="space-y-1.5">
+                <h3 class="text-xs font-bold text-[#202124] flex items-center gap-2">
+                  <Lock class="w-4 h-4 text-[#1a73e8] flex-shrink-0" />
+                  <span>主密码与本地加密体系</span>
+                </h3>
+                <p class="text-[11px] text-[#5f6368] leading-relaxed">
+                  当前安全库所有账号数据使用 <b>AES-256-GCM</b> 强加密，密钥派生采用 <b>Scrypt (N=32768, r=8, p=1)</b> 算法。修改主密码将使用新密钥重新加密全库并自动更新设备绑定凭据。
+                </p>
+              </div>
+              <button
+                type="button"
+                @click="openChangePwdModal"
+                class="w-full sm:w-auto px-4 py-2 bg-white hover:bg-[#e8f0fe] text-[#1a73e8] border border-[#1a73e8]/40 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-all shadow-2xs flex-shrink-0 cursor-pointer whitespace-nowrap"
+              >
+                <KeyRound class="w-3.5 h-3.5" />
+                <span>修改主密码</span>
+              </button>
             </div>
           </div>
 
@@ -3569,7 +4871,19 @@ onUnmounted(() => {
             </div>
 
             <!-- Sub-Tab 1: Backups List -->
-            <div v-if="backupTab === 'backups'" class="space-y-2 max-h-72 overflow-y-auto pr-1">
+            <div v-if="backupTab === 'backups'" class="space-y-2.5">
+              <div class="flex items-center justify-between px-1">
+                <span class="text-[11px] text-[#5f6368]">系统自动滚动保留最近 30 份加密快照，您也可以随时手动创建快照</span>
+                <button
+                  type="button"
+                  @click="handleCreateManualBackup"
+                  class="px-3 py-1.5 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium flex items-center gap-1.5 shadow-2xs transition-colors cursor-pointer flex-shrink-0"
+                >
+                  <History class="w-3.5 h-3.5" />
+                  <span>立即创建当前快照</span>
+                </button>
+              </div>
+              <div class="space-y-2 max-h-64 overflow-y-auto pr-1">
               <div v-if="isLoadingBackups" class="py-8 text-center text-xs text-[#80868b]">
                 正在检索本地快照备份目录...
               </div>
@@ -3594,6 +4908,7 @@ onUnmounted(() => {
                 >
                   回滚此版本
                 </button>
+              </div>
               </div>
             </div>
 
@@ -3682,7 +4997,7 @@ onUnmounted(() => {
                     <h3 class="text-xs font-bold text-[#202124] flex items-center gap-2 flex-wrap">
                       <span>软件版本检查更新</span>
                       <span class="px-2 py-0.5 rounded-full bg-[#e8f0fe] text-[#1a73e8] text-[10px] font-mono font-bold whitespace-nowrap">
-                        当前: v3.1.16
+                        当前: v3.1.17
                       </span>
                     </h3>
                     <p class="text-[11px] text-[#5f6368] mt-0.5">
@@ -3908,7 +5223,7 @@ onUnmounted(() => {
               </div>
               <div>
                 <h3 class="text-base font-bold text-[#202124]">Google 账号管家</h3>
-                <p class="text-xs text-[#1a73e8] font-mono font-medium mt-0.5">v3.1.16</p>
+                <p class="text-xs text-[#1a73e8] font-mono font-medium mt-0.5">v3.1.17</p>
               </div>
               <p class="text-xs text-[#5f6368] max-w-md leading-relaxed">
                 面向专业运维与个人多账号管理的高性能轻量跨平台保险库，集成 RFC 6238 2FA 动态码、硬件级免密解锁、多隔离环境浏览器会话与 WebDAV 端到端纯密文同步。
@@ -4221,6 +5536,220 @@ onUnmounted(() => {
             {{ confirmState.confirmText }}
           </button>
         </div>
+      </div>
+    </div>
+
+    <!-- 11. BATCH UPDATE ACTION MODAL (Package A) -->
+    <div
+      v-if="showBatchActionModal"
+      class="fixed inset-0 z-[9990] flex items-center justify-center p-4 bg-black/45 backdrop-blur-sm"
+    >
+      <div class="w-full max-w-sm bg-white rounded-3xl p-6 shadow-2xl border border-[#dadce0] flex flex-col gap-4">
+        <div class="flex items-center justify-between pb-2 border-b border-[#f1f3f4]">
+          <h3 class="text-sm font-bold text-[#202124]">
+            {{
+              batchActionType === 'group'
+                ? `批量修改分组 (${selectedBatchIds.length} 个账号)`
+                : batchActionType === 'status'
+                ? `批量修改状态 (${selectedBatchIds.length} 个账号)`
+                : `批量修改 Google One (${selectedBatchIds.length} 个账号)`
+            }}
+          </h3>
+          <button @click="showBatchActionModal = false" class="p-1 hover:bg-[#f1f3f4] rounded-full text-[#5f6368]">
+            <X class="w-4 h-4" />
+          </button>
+        </div>
+
+        <div v-if="batchActionType === 'group'" class="space-y-2">
+          <label class="block text-xs font-semibold text-[#5f6368]">目标分组名称（留空则设为未分组）</label>
+          <input
+            type="text"
+            v-model="batchTargetGroup"
+            placeholder="例如：主力号 / 工作 / 2026新号..."
+            class="w-full px-3 py-2 bg-[#f1f3f4] focus:bg-white rounded-xl border border-transparent focus:border-[#1a73e8] text-xs outline-none"
+          />
+        </div>
+
+        <div v-else-if="batchActionType === 'status'" class="space-y-2">
+          <label class="block text-xs font-semibold text-[#5f6368]">选择账号状态</label>
+          <select
+            v-model="batchTargetStatus"
+            class="w-full px-3 py-2 bg-[#f1f3f4] focus:bg-white rounded-xl border border-transparent focus:border-[#1a73e8] text-xs outline-none font-medium"
+          >
+            <option v-for="st in accountStatusOptions" :key="st" :value="st">{{ st }}</option>
+          </select>
+        </div>
+
+        <div v-else class="space-y-3">
+          <div>
+            <label class="block text-xs font-semibold text-[#5f6368] mb-1">Google One 方案</label>
+            <select
+              v-model="batchTargetOnePlan"
+              class="w-full px-3 py-2 bg-[#f1f3f4] focus:bg-white rounded-xl border border-transparent focus:border-[#1a73e8] text-xs outline-none font-medium"
+            >
+              <option v-for="plan in googleOnePlanOptions" :key="plan" :value="plan">{{ plan }}</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-[#5f6368] mb-1">Google One 状态</label>
+            <select
+              v-model="batchTargetOneStatus"
+              class="w-full px-3 py-2 bg-[#f1f3f4] focus:bg-white rounded-xl border border-transparent focus:border-[#1a73e8] text-xs outline-none font-medium"
+            >
+              <option value="active">有效（手动标记）</option>
+              <option value="expired">已失效</option>
+              <option value="inactive">非会员</option>
+              <option value="unknown">未验证</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-2 pt-2 border-t border-[#f1f3f4]">
+          <button
+            type="button"
+            @click="showBatchActionModal = false"
+            class="px-4 py-2 bg-[#f1f3f4] hover:bg-[#e8eaed] text-[#444746] rounded-xl text-xs font-medium"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            @click="executeBatchUpdate"
+            class="px-5 py-2 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium shadow-sm"
+          >
+            确认批量修改
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 12. 2FA QR CODE TRANSFER MODAL (Package B) -->
+    <div
+      v-if="showTotpQrModal && totpQrData"
+      class="fixed inset-0 z-[9990] flex items-center justify-center p-4 bg-black/45 backdrop-blur-sm"
+    >
+      <div class="w-full max-w-sm bg-white rounded-3xl p-6 shadow-2xl border border-[#dadce0] flex flex-col items-center gap-4 text-center">
+        <div class="w-full flex items-center justify-between pb-2 border-b border-[#f1f3f4]">
+          <div class="text-left">
+            <h3 class="text-sm font-bold text-[#202124]">2FA 转移二维码</h3>
+            <p class="text-[11px] text-[#5f6368] truncate max-w-[220px]">{{ selectedRecord?.email }}</p>
+          </div>
+          <button @click="showTotpQrModal = false" class="p-1.5 hover:bg-[#f1f3f4] rounded-full text-[#5f6368]">
+            <X class="w-4 h-4" />
+          </button>
+        </div>
+
+        <div class="p-3 bg-white border-2 border-[#dadce0] rounded-2xl shadow-xs">
+          <img :src="totpQrData.qr_base64" alt="2FA TOTP QR Code" class="w-48 h-48 object-contain" />
+        </div>
+
+        <p class="text-[11px] text-[#5f6368] leading-relaxed">
+          使用 Google Authenticator、Microsoft Authenticator 或其他手机验证器直接扫码即可导入该账号的 2FA 动态验证码。
+        </p>
+
+        <div class="w-full bg-[#f8fafd] p-2.5 rounded-xl border border-[#dadce0]/80 flex items-center justify-between gap-2 text-xs">
+          <span class="font-mono text-[11px] text-[#202124] truncate select-all">{{ totpQrData.secret }}</span>
+          <button
+            type="button"
+            @click="copyText(totpQrData.secret, 'qr_secret', '已复制 Base32 密钥')"
+            class="px-2.5 py-1 bg-white hover:bg-[#e8f0fe] text-[#1a73e8] border border-[#dadce0] rounded-lg text-[11px] font-medium flex-shrink-0 cursor-pointer"
+          >
+            复制密钥
+          </button>
+        </div>
+
+        <div class="w-full flex items-center justify-end gap-2 pt-1">
+          <button
+            type="button"
+            @click="copyText(totpQrData.otpauth_url, 'qr_uri', '已复制 otpauth:// 链接')"
+            class="px-3.5 py-2 bg-[#f1f3f4] hover:bg-[#e8eaed] text-[#3c4043] rounded-xl text-xs font-medium cursor-pointer"
+          >
+            复制 otpauth 链接
+          </button>
+          <button
+            type="button"
+            @click="showTotpQrModal = false"
+            class="px-5 py-2 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium cursor-pointer"
+          >
+            完成
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 13. CHANGE MASTER PASSWORD MODAL (Package B) -->
+    <div
+      v-if="showChangePwdModal"
+      class="fixed inset-0 z-[9995] flex items-center justify-center p-4 bg-black/45 backdrop-blur-sm"
+    >
+      <div class="w-full max-w-md bg-white rounded-3xl p-6 shadow-2xl border border-[#dadce0] flex flex-col gap-4">
+        <div class="flex items-center justify-between pb-2 border-b border-[#f1f3f4]">
+          <div class="flex items-center gap-2">
+            <KeyRound class="w-4 h-4 text-[#1a73e8]" />
+            <h3 class="text-sm font-bold text-[#202124]">修改安全库主密码</h3>
+          </div>
+          <button @click="showChangePwdModal = false" class="p-1.5 hover:bg-[#f1f3f4] rounded-full text-[#5f6368]">
+            <X class="w-4 h-4" />
+          </button>
+        </div>
+
+        <form @submit.prevent="handleChangeMasterPassword" class="space-y-3.5">
+          <div>
+            <label class="block text-xs font-semibold text-[#5f6368] mb-1">当前原主密码 *</label>
+            <input
+              type="password"
+              required
+              v-model="changePwdForm.oldPassword"
+              placeholder="请输入当前正在使用的主密码..."
+              class="w-full px-3 py-2.5 bg-[#f1f3f4] focus:bg-white rounded-xl border border-transparent focus:border-[#1a73e8] text-xs outline-none"
+            />
+          </div>
+
+          <div>
+            <label class="block text-xs font-semibold text-[#5f6368] mb-1">新主密码 *</label>
+            <input
+              type="password"
+              required
+              v-model="changePwdForm.newPassword"
+              placeholder="请输入新的主密码..."
+              class="w-full px-3 py-2.5 bg-[#f1f3f4] focus:bg-white rounded-xl border border-transparent focus:border-[#1a73e8] text-xs outline-none"
+            />
+          </div>
+
+          <div>
+            <label class="block text-xs font-semibold text-[#5f6368] mb-1">确认新主密码 *</label>
+            <input
+              type="password"
+              required
+              v-model="changePwdForm.confirmPassword"
+              placeholder="请再次输入新主密码..."
+              class="w-full px-3 py-2.5 bg-[#f1f3f4] focus:bg-white rounded-xl border border-transparent focus:border-[#1a73e8] text-xs outline-none"
+            />
+          </div>
+
+          <div class="p-3 bg-amber-50/80 border border-amber-200 rounded-xl text-[11px] text-amber-800 leading-relaxed">
+            提示：修改主密码后，系统会自动先为旧密文库创建安全快照备份，并用新主密码重新执行 AES-256-GCM 加密。请牢记新主密码！
+          </div>
+
+          <div class="flex items-center justify-end gap-2 pt-2 border-t border-[#f1f3f4]">
+            <button
+              type="button"
+              @click="showChangePwdModal = false"
+              :disabled="isChangingPwd"
+              class="px-4 py-2 bg-[#f1f3f4] hover:bg-[#e8eaed] text-[#444746] rounded-xl text-xs font-medium"
+            >
+              取消
+            </button>
+            <button
+              type="submit"
+              :disabled="isChangingPwd"
+              class="px-5 py-2 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium shadow-sm flex items-center gap-1.5 disabled:opacity-50"
+            >
+              <RefreshCw v-if="isChangingPwd" class="w-3.5 h-3.5 animate-spin" />
+              <span>{{ isChangingPwd ? "正在重新加密..." : "确认修改并重新加密" }}</span>
+            </button>
+          </div>
+        </form>
       </div>
     </div>
 

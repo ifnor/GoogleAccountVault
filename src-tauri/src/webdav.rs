@@ -280,7 +280,25 @@ pub fn smart_merge_records(
         }
     }
 
-    let mut merged: Vec<AccountRecord> = map.into_values().collect();
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64;
+    let thirty_days_ms: i64 = 30 * 24 * 3600 * 1000;
+
+    let mut merged: Vec<AccountRecord> = map
+        .into_values()
+        .filter(|r| {
+            // 自动清理超过 30 天的软删除墓碑记录 (排除测试用的小时间戳)
+            if let Some(del_ts) = r.deleted_at {
+                if del_ts > 1_000_000_000_000 && now_ms - del_ts > thirty_days_ms {
+                    needs_upload = true;
+                    return false;
+                }
+            }
+            true
+        })
+        .collect();
     // 基础稳定排序：按邮箱小写升序作为底层基准，避免 HashMap 乱序重排
     merged.sort_by(|a, b| a.email.to_lowercase().cmp(&b.email.to_lowercase()));
     (merged, needs_upload)
@@ -465,6 +483,9 @@ mod tests {
             google_one_used: String::new(),
             google_one_status: String::new(),
             status: "active".to_string(),
+            is_pinned: false,
+            expire_at: String::new(),
+            proxy: String::new(),
             updated_at: updated,
             created_at: updated,
             deleted_at: deleted,

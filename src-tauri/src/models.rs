@@ -32,6 +32,12 @@ pub struct AccountRecord {
     #[serde(default)]
     pub status: String,
     #[serde(default)]
+    pub is_pinned: bool,
+    #[serde(default)]
+    pub expire_at: String,
+    #[serde(default)]
+    pub proxy: String,
+    #[serde(default)]
     pub updated_at: i64,
     #[serde(default)]
     pub created_at: i64,
@@ -52,4 +58,11 @@ pub struct VaultSettings {
 pub struct TotpResult {
     pub code: String,
     pub remaining_seconds: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TotpQrResult {
+    pub qr_base64: String,
+    pub otpauth_url: String,
+    pub secret: String,
 }
