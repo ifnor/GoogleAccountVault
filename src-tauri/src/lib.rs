@@ -748,6 +748,170 @@ fn find_app_class<'a>(
     }
 }
 
+fn is_localhost_callback_url(u: &tauri::Url) -> bool {
+    let scheme = u.scheme();
+    if scheme != "http" && scheme != "https" {
+        return false;
+    }
+    match u.host_str() {
+        Some("localhost") | Some("127.0.0.1") | Some("[::1]") | Some("0.0.0.0") => true,
+        _ => false,
+    }
+}
+
+fn build_localhost_callback_eval_script(callback_url: &str, email: &str) -> String {
+    let url_json = serde_json::to_string(callback_url).unwrap_or_else(|_| "\"\"".to_string());
+    let email_json = serde_json::to_string(email).unwrap_or_else(|_| "\"\"".to_string());
+
+    format!(
+        r###"
+        (function() {{
+            const fullUrl = {url_json};
+            const accountEmail = {email_json};
+            let portStr = "";
+            let codeParam = "";
+            try {{
+                const parsed = new URL(fullUrl);
+                portStr = parsed.port ? ("端口: " + parsed.port) : "本地回环";
+                codeParam = parsed.searchParams.get("code") || "";
+                if (!codeParam && parsed.hash) {{
+                    const hashParams = new URLSearchParams(parsed.hash.replace(/^#/, ""));
+                    codeParam = hashParams.get("code") || hashParams.get("access_token") || "";
+                }}
+            }} catch (_) {{}}
+
+            const escapeHtml = (str) => String(str)
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;");
+
+            const codeSectionHtml = codeParam ? `
+                <div style="margin-top:16px;padding:14px 16px;background:#f8fafd;border-radius:16px;border:1px solid #dadce0;display:flex;align-items:center;justify-content:space-between;gap:12px;">
+                    <div style="min-width:0;flex:1;text-align:left;">
+                        <div style="font-size:12px;color:#5f6368;font-weight:500;">已自动提取授权码 (<code style="color:#1a73e8;font-family:Consolas,monospace;">code</code> 参数)</div>
+                        <div id="gvaultCodeVal" style="font-family:Consolas,Monaco,monospace;font-size:12px;font-weight:600;color:#202124;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:4px;user-select:all;">${{escapeHtml(codeParam)}}</div>
+                    </div>
+                    <button id="gvaultCopyCodeBtn" type="button" style="padding:7px 14px;background:#ffffff;color:#1a73e8;border:1px solid #dadce0;border-radius:12px;font-size:12px;font-weight:600;cursor:pointer;flex-shrink:0;transition:all 0.15s;">
+                        仅复制 Code
+                    </button>
+                </div>
+            ` : "";
+
+            const html = `
+                <div style="min-height:100vh;margin:0;padding:24px;background:#f0f4f9;display:flex;align-items:center;justify-content:center;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Microsoft YaHei',sans-serif;box-sizing:border-box;">
+                    <div style="width:100%;max-width:520px;background:#ffffff;color:#202124;border:1px solid #dadce0;border-radius:24px;padding:28px;box-shadow:0 12px 32px rgba(0,0,0,0.08);box-sizing:border-box;">
+                        <div style="display:flex;flex-direction:column;align-items:center;text-align:center;margin-bottom:20px;">
+                            <div style="position:relative;margin-bottom:12px;">
+                                <div style="width:56px;height:56px;border-radius:16px;background:#f8fafd;border:1px solid #dadce0;display:flex;align-items:center;justify-content:center;">
+                                    <svg style="width:32px;height:32px;" viewBox="0 0 24 24" fill="none">
+                                        <path d="M12 2a10 10 0 0 1 7.07 2.93l-2.83 2.83A6 6 0 0 0 12 6V2z" fill="#EA4335" />
+                                        <path d="M19.07 4.93A10 10 0 0 1 22 12h-4a6 6 0 0 0-1.76-4.24l2.83-2.83z" fill="#FBBC05" />
+                                        <path d="M22 12a10 10 0 0 1-10 10v-4a6 6 0 0 0 6-6h4z" fill="#34A853" />
+                                        <path d="M12 22A10 10 0 0 1 2 12h4a6 6 0 0 0 6 6v4z" fill="#4285F4" />
+                                        <path d="M2 12A10 10 0 0 1 12 2v4a6 6 0 0 0-6 6H2z" fill="#4285F4" opacity="0.85" />
+                                    </svg>
+                                </div>
+                                <div style="position:absolute;bottom:-4px;right:-4px;width:20px;height:20px;border-radius:50%;background:#10b981;color:#ffffff;display:flex;align-items:center;justify-content:center;border:2px solid #ffffff;">
+                                    <svg style="width:12px;height:12px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                                        <polyline points="20 6 9 17 4 12"></polyline>
+                                    </svg>
+                                </div>
+                            </div>
+
+                            <div style="display:inline-flex;align-items:center;padding:3px 12px;border-radius:999px;background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;font-size:12px;font-weight:600;margin-bottom:6px;">
+                                OAuth 本地回调已自动拦截
+                            </div>
+                            <h1 style="font-size:17px;font-weight:700;color:#202124;margin:2px 0;">已捕获本地回调地址 (localhost)</h1>
+                            <p style="font-size:12px;color:#5f6368;margin:4px 0 0 0;">当前授权账号：<span style="font-weight:600;color:#1a73e8;">${{escapeHtml(accountEmail)}}</span></p>
+                        </div>
+
+                        <div>
+                            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                                <label style="font-size:12px;font-weight:600;color:#3c4043;">完整回调地址 (Callback URL)</label>
+                                <span style="font-size:12px;color:#80868b;font-family:Consolas,monospace;">${{escapeHtml(portStr)}}</span>
+                            </div>
+
+                            <textarea id="gvaultUrlInput" readonly rows="4" style="width:100%;padding:12px;background:#f8fafd;border-radius:16px;border:1px solid #dadce0;font-family:Consolas,Monaco,monospace;font-size:12px;color:#202124;outline:none;resize:none;line-height:1.55;word-break:break-all;box-sizing:border-box;">${{escapeHtml(fullUrl)}}</textarea>
+
+                            <button id="gvaultCopyUrlBtn" type="button" style="margin-top:10px;width:100%;padding:11px 16px;background:#1a73e8;color:#ffffff;border:none;border-radius:12px;font-size:13px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;box-shadow:0 2px 6px rgba(26,115,232,0.25);transition:all 0.15s;">
+                                <svg style="width:16px;height:16px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                                </svg>
+                                <span id="gvaultCopyBtnText">一键复制完整回调地址</span>
+                            </button>
+                        </div>
+
+                        ${{codeSectionHtml}}
+                    </div>
+                </div>
+            `;
+
+            document.open();
+            document.write("<!DOCTYPE html><html><head><meta charset='utf-8'><title>已捕获本地回调地址 - Google 账号管家</title></head><body style='margin:0;padding:0;'>" + html + "</body></html>");
+            document.close();
+
+            function copyTextFallback(text) {{
+                if (navigator.clipboard && navigator.clipboard.writeText) {{
+                    navigator.clipboard.writeText(text).catch(() => fallbackExecCopy(text));
+                }} else {{
+                    fallbackExecCopy(text);
+                }}
+            }}
+
+            function fallbackExecCopy(text) {{
+                const ta = document.createElement("textarea");
+                ta.value = text;
+                ta.style.position = "fixed";
+                ta.style.opacity = "0";
+                document.body.appendChild(ta);
+                ta.focus();
+                ta.select();
+                try {{ document.execCommand("copy"); }} catch (_) {{}}
+                document.body.removeChild(ta);
+            }}
+
+            const urlInput = document.getElementById("gvaultUrlInput");
+            const copyUrlBtn = document.getElementById("gvaultCopyUrlBtn");
+            const copyBtnText = document.getElementById("gvaultCopyBtnText");
+            if (urlInput) {{
+                urlInput.addEventListener("click", () => urlInput.select());
+            }}
+            if (copyUrlBtn) {{
+                copyUrlBtn.addEventListener("click", () => {{
+                    if (urlInput) urlInput.select();
+                    copyTextFallback(fullUrl);
+                    copyUrlBtn.style.background = "#059669";
+                    if (copyBtnText) copyBtnText.innerText = "✓ 已成功复制完整回调地址！";
+                    setTimeout(() => {{
+                        copyUrlBtn.style.background = "#1a73e8";
+                        if (copyBtnText) copyBtnText.innerText = "一键复制完整回调地址";
+                    }}, 2000);
+                }});
+            }}
+
+            const copyCodeBtn = document.getElementById("gvaultCopyCodeBtn");
+            if (copyCodeBtn && codeParam) {{
+                copyCodeBtn.addEventListener("click", () => {{
+                    copyTextFallback(codeParam);
+                    copyCodeBtn.innerText = "✓ 已复制";
+                    copyCodeBtn.style.background = "#ecfdf5";
+                    copyCodeBtn.style.color = "#047857";
+                    copyCodeBtn.style.borderColor = "#6ee7b7";
+                    setTimeout(() => {{
+                        copyCodeBtn.innerText = "仅复制 Code";
+                        copyCodeBtn.style.background = "#ffffff";
+                        copyCodeBtn.style.color = "#1a73e8";
+                        copyCodeBtn.style.borderColor = "#dadce0";
+                    }}, 2000);
+                }});
+            }}
+        }})();
+        "###
+    )
+}
+
 #[tauri::command]
 async fn open_in_app_browser(
     _app: tauri::AppHandle,
@@ -959,8 +1123,13 @@ async fn open_in_app_browser(
         if let Some(w) = app.get_webview_window(&safe_label) {
             let _ = w.show();
             let _ = w.set_focus();
-            let _ = w.navigate(parsed_url);
-            let _ = w.eval(&autofill_script);
+            if is_localhost_callback_url(&parsed_url) {
+                let script = build_localhost_callback_eval_script(parsed_url.as_str(), &email);
+                let _ = w.eval(&script);
+            } else {
+                let _ = w.navigate(parsed_url);
+                let _ = w.eval(&autofill_script);
+            }
             return Ok(());
         }
 
@@ -975,6 +1144,10 @@ async fn open_in_app_browser(
             format!("Google 独立会话 - {}", email)
         };
 
+        let nav_app = app.clone();
+        let nav_label = safe_label.clone();
+        let nav_email = email.clone();
+
         let mut builder = tauri::WebviewWindowBuilder::new(
             app,
             &safe_label,
@@ -986,7 +1159,23 @@ async fn open_in_app_browser(
         .user_agent(ua)
         .devtools(true)
         .initialization_script(&autofill_script)
-        .data_directory(session_dir);
+        .data_directory(session_dir)
+        .on_navigation(move |target_url| {
+            if is_localhost_callback_url(target_url) {
+                let captured = target_url.as_str().to_string();
+                let script = build_localhost_callback_eval_script(&captured, &nav_email);
+                let app_handle = nav_app.clone();
+                let label_clone = nav_label.clone();
+                std::thread::spawn(move || {
+                    use tauri::Manager;
+                    if let Some(win) = app_handle.get_webview_window(&label_clone) {
+                        let _ = win.eval(&script);
+                    }
+                });
+                return false;
+            }
+            true
+        });
 
         if !clean_proxy.is_empty() {
             let normalized_proxy = if clean_proxy.contains("://") {

@@ -1053,7 +1053,23 @@ class IsolatedBrowserActivity : Activity() {
                 return handleUrl(url ?: "")
             }
 
+            private fun isLocalhostCallback(rawUrl: String): Boolean {
+                return try {
+                    val u = Uri.parse(rawUrl)
+                    val scheme = u.scheme?.lowercase() ?: ""
+                    if (scheme != "http" && scheme != "https") return false
+                    val host = u.host?.lowercase() ?: ""
+                    host == "localhost" || host == "127.0.0.1" || host == "[::1]" || host == "0.0.0.0"
+                } catch (_: Throwable) {
+                    false
+                }
+            }
+
             private fun handleUrl(nextUrl: String): Boolean {
+                if (isLocalhostCallback(nextUrl)) {
+                    renderLocalhostCallbackPage(nextUrl)
+                    return true
+                }
                 if (nextUrl.startsWith("http://") || nextUrl.startsWith("https://")) {
                     return false
                 }
@@ -1066,6 +1082,138 @@ class IsolatedBrowserActivity : Activity() {
                 }
             }
         }
+    }
+
+    private fun renderLocalhostCallbackPage(callbackUrl: String) {
+        if (!::webView.isInitialized) return
+        val u = try { Uri.parse(callbackUrl) } catch (_: Throwable) { null }
+        val portStr = if (u != null && u.port != -1) "端口: ${u.port}" else "本地回环"
+        var codeParam = try { u?.getQueryParameter("code") ?: "" } catch (_: Throwable) { "" }
+        if (codeParam.isEmpty() && u?.fragment != null) {
+            try {
+                val fragUri = Uri.parse("http://localhost/?" + u.fragment)
+                codeParam = fragUri.getQueryParameter("code") ?: fragUri.getQueryParameter("access_token") ?: ""
+            } catch (_: Throwable) {}
+        }
+
+        val urlJson = JSONObject.quote(callbackUrl)
+        val codeJson = JSONObject.quote(codeParam)
+        val safeUrlHtml = android.text.Html.escapeHtml(callbackUrl)
+        val safeEmailHtml = android.text.Html.escapeHtml(email)
+        val safePortHtml = android.text.Html.escapeHtml(portStr)
+        val safeCodeHtml = android.text.Html.escapeHtml(codeParam)
+
+        val codeSectionHtml = if (codeParam.isNotEmpty()) {
+            """
+            <div style="margin-top:16px;padding:14px 16px;background:#f8fafd;border-radius:16px;border:1px solid #dadce0;display:flex;align-items:center;justify-content:space-between;gap:12px;">
+                <div style="min-width:0;flex:1;text-align:left;">
+                    <div style="font-size:12px;color:#5f6368;font-weight:500;">已自动提取授权码 (<code style="color:#1a73e8;font-family:monospace;">code</code> 参数)</div>
+                    <div id="gvaultCodeVal" style="font-family:monospace;font-size:12px;font-weight:600;color:#202124;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:4px;user-select:all;">$safeCodeHtml</div>
+                </div>
+                <button id="gvaultCopyCodeBtn" type="button" onclick="copyCode()" style="padding:7px 14px;background:#ffffff;color:#1a73e8;border:1px solid #dadce0;border-radius:12px;font-size:12px;font-weight:600;flex-shrink:0;">
+                    仅复制 Code
+                </button>
+            </div>
+            """
+        } else ""
+
+        val html = """
+            <!DOCTYPE html>
+            <html lang="zh-CN">
+            <head>
+                <meta charset="utf-8" />
+                <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+                <title>已捕获本地回调地址</title>
+            </head>
+            <body style="margin:0;padding:18px;min-height:90vh;background:#f0f4f9;display:flex;align-items:center;justify-content:center;font-family:sans-serif;box-sizing:border-box;">
+                <div style="width:100%;max-width:480px;background:#ffffff;color:#202124;border:1px solid #dadce0;border-radius:24px;padding:24px;box-shadow:0 10px 28px rgba(0,0,0,0.08);box-sizing:border-box;">
+                    <div style="display:flex;flex-direction:column;align-items:center;text-align:center;margin-bottom:18px;">
+                        <div style="position:relative;margin-bottom:12px;">
+                            <div style="width:54px;height:54px;border-radius:16px;background:#f8fafd;border:1px solid #dadce0;display:flex;align-items:center;justify-content:center;">
+                                <svg style="width:30px;height:30px;" viewBox="0 0 24 24" fill="none">
+                                    <path d="M12 2a10 10 0 0 1 7.07 2.93l-2.83 2.83A6 6 0 0 0 12 6V2z" fill="#EA4335" />
+                                    <path d="M19.07 4.93A10 10 0 0 1 22 12h-4a6 6 0 0 0-1.76-4.24l2.83-2.83z" fill="#FBBC05" />
+                                    <path d="M22 12a10 10 0 0 1-10 10v-4a6 6 0 0 0 6-6h4z" fill="#34A853" />
+                                    <path d="M12 22A10 10 0 0 1 2 12h4a6 6 0 0 0 6 6v4z" fill="#4285F4" />
+                                    <path d="M2 12A10 10 0 0 1 12 2v4a6 6 0 0 0-6 6H2z" fill="#4285F4" opacity="0.85" />
+                                </svg>
+                            </div>
+                            <div style="position:absolute;bottom:-4px;right:-4px;width:20px;height:20px;border-radius:50%;background:#10b981;color:#ffffff;display:flex;align-items:center;justify-content:center;border:2px solid #ffffff;">
+                                <svg style="width:12px;height:12px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                                    <polyline points="20 6 9 17 4 12"></polyline>
+                                </svg>
+                            </div>
+                        </div>
+
+                        <div style="display:inline-flex;align-items:center;padding:3px 12px;border-radius:999px;background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;font-size:12px;font-weight:600;margin-bottom:6px;">
+                            OAuth 本地回调已自动拦截
+                        </div>
+                        <h1 style="font-size:16px;font-weight:700;color:#202124;margin:2px 0;">已捕获本地回调地址 (localhost)</h1>
+                        <p style="font-size:12px;color:#5f6368;margin:4px 0 0 0;">当前授权账号：<span style="font-weight:600;color:#1a73e8;">$safeEmailHtml</span></p>
+                    </div>
+
+                    <div>
+                        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                            <label style="font-size:12px;font-weight:600;color:#3c4043;">完整回调地址 (Callback URL)</label>
+                            <span style="font-size:12px;color:#80868b;font-family:monospace;">$safePortHtml</span>
+                        </div>
+
+                        <textarea id="gvaultUrlInput" readonly rows="4" onclick="this.select()" style="width:100%;padding:12px;background:#f8fafd;border-radius:16px;border:1px solid #dadce0;font-family:monospace;font-size:12px;color:#202124;outline:none;resize:none;line-height:1.5;word-break:break-all;box-sizing:border-box;">$safeUrlHtml</textarea>
+
+                        <button id="gvaultCopyUrlBtn" type="button" onclick="copyFull()" style="margin-top:10px;width:100%;padding:11px 16px;background:#1a73e8;color:#ffffff;border:none;border-radius:12px;font-size:13px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 2px 6px rgba(26,115,232,0.25);">
+                            <span id="gvaultCopyBtnText">一键复制完整回调地址</span>
+                        </button>
+                    </div>
+
+                    $codeSectionHtml
+                </div>
+
+                <script>
+                    const fullUrl = $urlJson;
+                    const codeVal = $codeJson;
+                    function doCopy(txt) {
+                        if (navigator.clipboard && navigator.clipboard.writeText) {
+                            navigator.clipboard.writeText(txt);
+                        } else {
+                            const ta = document.createElement('textarea');
+                            ta.value = txt;
+                            document.body.appendChild(ta);
+                            ta.select();
+                            document.execCommand('copy');
+                            document.body.removeChild(ta);
+                        }
+                    }
+                    function copyFull() {
+                        const input = document.getElementById('gvaultUrlInput');
+                        if (input) input.select();
+                        doCopy(fullUrl);
+                        const btn = document.getElementById('gvaultCopyUrlBtn');
+                        const txt = document.getElementById('gvaultCopyBtnText');
+                        btn.style.background = '#059669';
+                        txt.innerText = '✓ 已成功复制完整回调地址！';
+                        setTimeout(() => {
+                            btn.style.background = '#1a73e8';
+                            txt.innerText = '一键复制完整回调地址';
+                        }, 2000);
+                    }
+                    function copyCode() {
+                        doCopy(codeVal);
+                        const btn = document.getElementById('gvaultCopyCodeBtn');
+                        btn.innerText = '✓ 已复制';
+                        btn.style.background = '#ecfdf5';
+                        btn.style.color = '#047857';
+                        setTimeout(() => {
+                            btn.innerText = '仅复制 Code';
+                            btn.style.background = '#ffffff';
+                            btn.style.color = '#1a73e8';
+                        }, 2000);
+                    }
+                </script>
+            </body>
+            </html>
+        """.trimIndent()
+
+        webView.loadDataWithBaseURL("https://localhost/", html, "text/html", "UTF-8", null)
     }
 
     private fun loadUrlWithIsolation() {
