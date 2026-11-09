@@ -833,35 +833,25 @@ fn build_localhost_callback_html(callback_url: &str, email: &str) -> String {
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>已捕获本地回调地址 - Google 账号管家</title>
+    <title>已捕获回调地址 - Google 账号管家</title>
 </head>
 <body style="min-height:100vh;margin:0;padding:24px;background:#f0f4f9;display:flex;align-items:center;justify-content:center;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Microsoft YaHei',sans-serif;box-sizing:border-box;">
     <div style="width:100%;max-width:520px;background:#ffffff;color:#202124;border:1px solid #dadce0;border-radius:24px;padding:28px;box-shadow:0 12px 32px rgba(0,0,0,0.08);box-sizing:border-box;">
         <div style="display:flex;flex-direction:column;align-items:center;text-align:center;margin-bottom:20px;">
-            <div style="position:relative;margin-bottom:12px;">
-                <div style="width:56px;height:56px;border-radius:16px;background:#f8fafd;border:1px solid #dadce0;display:flex;align-items:center;justify-content:center;">
-                    <svg style="width:32px;height:32px;" viewBox="0 0 24 24" fill="none">
-                        <path d="M12 2a10 10 0 0 1 7.07 2.93l-2.83 2.83A6 6 0 0 0 12 6V2z" fill="#EA4335" />
-                        <path d="M19.07 4.93A10 10 0 0 1 22 12h-4a6 6 0 0 0-1.76-4.24l2.83-2.83z" fill="#FBBC05" />
-                        <path d="M22 12a10 10 0 0 1-10 10v-4a6 6 0 0 0 6-6h4z" fill="#34A853" />
-                        <path d="M12 22A10 10 0 0 1 2 12h4a6 6 0 0 0 6 6v4z" fill="#4285F4" />
-                        <path d="M2 12A10 10 0 0 1 12 2v4a6 6 0 0 0-6 6H2z" fill="#4285F4" opacity="0.85" />
-                    </svg>
-                </div>
-                <div style="position:absolute;bottom:-4px;right:-4px;width:20px;height:20px;border-radius:50%;background:#10b981;color:#ffffff;display:flex;align-items:center;justify-content:center;border:2px solid #ffffff;">
-                    <svg style="width:12px;height:12px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
-                        <polyline points="20 6 9 17 4 12"></polyline>
-                    </svg>
-                </div>
+            <div style="margin-bottom:10px;display:flex;align-items:center;justify-content:center;">
+                <svg style="width:42px;height:42px;" viewBox="0 0 24 24" fill="none">
+                    <path d="M12 2a10 10 0 0 1 7.07 2.93l-2.83 2.83A6 6 0 0 0 12 6V2z" fill="#EA4335" />
+                    <path d="M19.07 4.93A10 10 0 0 1 22 12h-4a6 6 0 0 0-1.76-4.24l2.83-2.83z" fill="#FBBC05" />
+                    <path d="M22 12a10 10 0 0 1-10 10v-4a6 6 0 0 0 6-6h4z" fill="#34A853" />
+                    <path d="M12 22A10 10 0 0 1 2 12h4a6 6 0 0 0 6 6v4z" fill="#4285F4" />
+                    <path d="M2 12A10 10 0 0 1 12 2v4a6 6 0 0 0-6 6H2z" fill="#4285F4" opacity="0.85" />
+                </svg>
             </div>
 
-            <div id="gvaultStatusPill" style="display:inline-flex;align-items:center;padding:4px 12px;border-radius:999px;background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;font-size:12px;font-weight:600;margin-bottom:6px;transition:all 0.2s;">
-                OAuth 本地回调已拦截 · 同步触发本机跳转中
-            </div>
-            <h1 style="font-size:17px;font-weight:700;color:#202124;margin:2px 0;">已捕获本地回调地址 (localhost)</h1>
+            <h1 style="font-size:17px;font-weight:700;color:#202124;margin:2px 0;">已捕获回调地址</h1>
             <p style="font-size:12px;color:#5f6368;margin:4px 0 0 0;">当前授权账号：<span style="font-weight:600;color:#1a73e8;">{safe_email_html}</span></p>
-            <div id="gvaultLocalSyncNote" style="margin-top:10px;width:100%;padding:8px 12px;border-radius:12px;background:#f0fdf4;border:1px solid #bbf7d0;font-size:11.5px;color:#166534;line-height:1.45;box-sizing:border-box;">
-                ⚡ 正在后台同步向本机 <code style="font-family:Consolas,monospace;">{safe_port_html}</code> 发送回调请求，同时为您保留当前复制页面…
+            <div id="gvaultLocalSyncNote" style="margin-top:10px;width:100%;padding:8px 12px;border-radius:12px;background:#f0fdf4;border:1px solid #bbf7d0;font-size:12px;color:#166534;line-height:1.45;box-sizing:border-box;">
+                ⚡ 正在同步将授权结果送达监听服务…
             </div>
         </div>
 
@@ -879,6 +869,15 @@ fn build_localhost_callback_html(callback_url: &str, email: &str) -> String {
                     <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
                 </svg>
                 <span id="gvaultCopyBtnText">一键复制完整回调地址</span>
+            </button>
+
+            <button id="gvaultJumpBtn" type="button" onclick="jumpToCallback()" style="margin-top:10px;width:100%;padding:10px 16px;background:#ffffff;color:#1a73e8;border:1px solid #dadce0;border-radius:12px;font-size:13px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;transition:all 0.15s;">
+                <svg style="width:15px;height:15px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                    <polyline points="15 3 21 3 21 9"></polyline>
+                    <line x1="10" y1="14" x2="21" y2="3"></line>
+                </svg>
+                <span id="gvaultJumpBtnText">跳转回调地址</span>
             </button>
         </div>
 
@@ -935,6 +934,20 @@ fn build_localhost_callback_html(callback_url: &str, email: &str) -> String {
             }}, 2000);
         }}
 
+        function jumpToCallback() {{
+            const jumpBtnText = document.getElementById("gvaultJumpBtnText");
+            if (jumpBtnText) jumpBtnText.innerText = "正在跳转回调地址…";
+            try {{
+                const iframe = document.createElement("iframe");
+                iframe.style.display = "none";
+                iframe.src = "http://localhost/__gvault_passthrough__";
+                document.body.appendChild(iframe);
+            }} catch (_) {{}}
+            setTimeout(() => {{
+                window.location.href = fullUrl;
+            }}, 40);
+        }}
+
         function copyCode() {{
             const copyCodeBtn = document.getElementById("gvaultCopyCodeBtn");
             copyTextFallback(codeParam);
@@ -953,30 +966,20 @@ fn build_localhost_callback_html(callback_url: &str, email: &str) -> String {
         }}
 
         window.__gvaultSetLocalStatus = function(localOk, httpStatus) {{
-            const pill = document.getElementById("gvaultStatusPill");
             const note = document.getElementById("gvaultLocalSyncNote");
             if (localOk) {{
-                if (pill) {{
-                    pill.innerText = "✓ 已同步触发本机回调并展示提取页";
-                    pill.style.background = "#ecfdf5";
-                    pill.style.color = "#047857";
-                    pill.style.borderColor = "#6ee7b7";
-                }}
                 if (note) {{
                     note.style.background = "#ecfdf5";
                     note.style.borderColor = "#6ee7b7";
                     note.style.color = "#065f46";
-                    note.innerHTML = "✓ <b>本机回调已自动完成 (HTTP " + (httpStatus || 200) + ")</b>：已同步将授权结果送达本机监听服务，同时为您保留下方复制提取面板。";
+                    note.innerHTML = "✓ 回调已完成，已同步将授权结果送达监听服务";
                 }}
             }} else {{
-                if (pill) {{
-                    pill.innerText = "OAuth 本地回调已自动拦截";
-                }}
                 if (note) {{
                     note.style.background = "#eff6ff";
                     note.style.borderColor = "#bfdbfe";
                     note.style.color = "#1e40af";
-                    note.innerHTML = "ℹ️ 未检测到本机开启该端口监听（一次性授权码未被消耗），请直接点击下方按钮复制回调地址或 Code。";
+                    note.innerHTML = "ℹ️ 未检测到本机开启该端口监听，请直接点击下方按钮复制回调地址或 Code";
                 }}
             }}
         }};
@@ -1088,6 +1091,7 @@ fn attach_webview2_localhost_interceptor(
             let email_for_handler = email.clone();
             let win_for_handler = win_for_webview.clone();
             let last_triggered = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+            let passthrough_once = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             let handler = WebResourceRequestedEventHandler::create(Box::new(
                 move |wv: Option<ICoreWebView2>,
                       args: Option<ICoreWebView2WebResourceRequestedEventArgs>| {
@@ -1100,7 +1104,32 @@ fn attach_webview2_localhost_interceptor(
                     let uri_str = uri_pwstr.to_string().unwrap_or_default();
                     windows::Win32::System::Com::CoTaskMemFree(Some(uri_pwstr.0 as *const _));
 
+                    if uri_str.contains("__gvault_passthrough__") {
+                        passthrough_once.store(true, std::sync::atomic::Ordering::SeqCst);
+                        if let Ok(ref env) = env_res {
+                            if let Some(stream) = SHCreateMemStream(Some(b"ok")) {
+                                let status_wide: Vec<u16> = "OK".encode_utf16().chain(std::iter::once(0)).collect();
+                                let headers_wide: Vec<u16> = "Content-Type: text/plain\r\nCache-Control: no-store"
+                                    .encode_utf16()
+                                    .chain(std::iter::once(0))
+                                    .collect();
+                                if let Ok(resp) = env.CreateWebResourceResponse(
+                                    &stream,
+                                    200,
+                                    PCWSTR(status_wide.as_ptr()),
+                                    PCWSTR(headers_wide.as_ptr()),
+                                ) {
+                                    let _ = args.SetResponse(&resp);
+                                }
+                            }
+                        }
+                        return Ok(());
+                    }
+
                     if is_localhost_callback_str(&uri_str) {
+                        if passthrough_once.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                            return Ok(());
+                        }
                         let should_trigger = if let Ok(mut guard) = last_triggered.lock() {
                             if *guard != uri_str {
                                 *guard = uri_str.clone();

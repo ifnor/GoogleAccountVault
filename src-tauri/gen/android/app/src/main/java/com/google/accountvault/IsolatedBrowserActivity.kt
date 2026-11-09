@@ -1045,6 +1045,16 @@ class IsolatedBrowserActivity : Activity() {
             }
 
             @JavascriptInterface
+            fun jumpToUrl(url: String) {
+                mainHandler.post {
+                    allowLocalhostPassthrough = true
+                    if (::webView.isInitialized) {
+                        webView.loadUrl(url)
+                    }
+                }
+            }
+
+            @JavascriptInterface
             fun getRealtimeTotp(): String {
                 return if (totpSecret.isNotBlank()) {
                     try {
@@ -1060,7 +1070,7 @@ class IsolatedBrowserActivity : Activity() {
 
         webView.webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
-                if (url != null && isLocalhostCallback(url)) {
+                if (url != null && isLocalhostCallback(url) && !allowLocalhostPassthrough) {
                     view?.stopLoading()
                     renderLocalhostCallbackPage(url)
                     return
@@ -1076,7 +1086,7 @@ class IsolatedBrowserActivity : Activity() {
 
             override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
                 val reqUrl = request?.url?.toString() ?: ""
-                if (request?.isForMainFrame == true && isLocalhostCallback(reqUrl)) {
+                if (request?.isForMainFrame == true && isLocalhostCallback(reqUrl) && !allowLocalhostPassthrough) {
                     triggerLocalCallbackInBackground(reqUrl)
                     val htmlBytes = buildLocalhostCallbackHtml(reqUrl).toByteArray(Charsets.UTF_8)
                     return WebResourceResponse("text/html", "UTF-8", java.io.ByteArrayInputStream(htmlBytes))
@@ -1100,7 +1110,7 @@ class IsolatedBrowserActivity : Activity() {
                 error: WebResourceError?
             ) {
                 val failingUrl = request?.url?.toString() ?: ""
-                if (request?.isForMainFrame == true && isLocalhostCallback(failingUrl)) {
+                if (request?.isForMainFrame == true && isLocalhostCallback(failingUrl) && !allowLocalhostPassthrough) {
                     renderLocalhostCallbackPage(failingUrl)
                     return
                 }
@@ -1120,7 +1130,7 @@ class IsolatedBrowserActivity : Activity() {
             }
 
             private fun handleUrl(nextUrl: String): Boolean {
-                if (isLocalhostCallback(nextUrl)) {
+                if (isLocalhostCallback(nextUrl) && !allowLocalhostPassthrough) {
                     renderLocalhostCallbackPage(nextUrl)
                     return true
                 }
@@ -1137,6 +1147,9 @@ class IsolatedBrowserActivity : Activity() {
             }
         }
     }
+
+    @Volatile
+    private var allowLocalhostPassthrough: Boolean = false
 
     private fun buildLocalhostCallbackHtml(callbackUrl: String): String {
         val u = try { Uri.parse(callbackUrl) } catch (_: Throwable) { null }
@@ -1176,35 +1189,25 @@ class IsolatedBrowserActivity : Activity() {
             <head>
                 <meta charset="utf-8" />
                 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-                <title>已捕获本地回调地址</title>
+                <title>已捕获回调地址</title>
             </head>
             <body style="margin:0;padding:18px;min-height:90vh;background:#f0f4f9;display:flex;align-items:center;justify-content:center;font-family:sans-serif;box-sizing:border-box;">
                 <div style="width:100%;max-width:480px;background:#ffffff;color:#202124;border:1px solid #dadce0;border-radius:24px;padding:24px;box-shadow:0 10px 28px rgba(0,0,0,0.08);box-sizing:border-box;">
                     <div style="display:flex;flex-direction:column;align-items:center;text-align:center;margin-bottom:18px;">
-                        <div style="position:relative;margin-bottom:12px;">
-                            <div style="width:54px;height:54px;border-radius:16px;background:#f8fafd;border:1px solid #dadce0;display:flex;align-items:center;justify-content:center;">
-                                <svg style="width:30px;height:30px;" viewBox="0 0 24 24" fill="none">
-                                    <path d="M12 2a10 10 0 0 1 7.07 2.93l-2.83 2.83A6 6 0 0 0 12 6V2z" fill="#EA4335" />
-                                    <path d="M19.07 4.93A10 10 0 0 1 22 12h-4a6 6 0 0 0-1.76-4.24l2.83-2.83z" fill="#FBBC05" />
-                                    <path d="M22 12a10 10 0 0 1-10 10v-4a6 6 0 0 0 6-6h4z" fill="#34A853" />
-                                    <path d="M12 22A10 10 0 0 1 2 12h4a6 6 0 0 0 6 6v4z" fill="#4285F4" />
-                                    <path d="M2 12A10 10 0 0 1 12 2v4a6 6 0 0 0-6 6H2z" fill="#4285F4" opacity="0.85" />
-                                </svg>
-                            </div>
-                            <div style="position:absolute;bottom:-4px;right:-4px;width:20px;height:20px;border-radius:50%;background:#10b981;color:#ffffff;display:flex;align-items:center;justify-content:center;border:2px solid #ffffff;">
-                                <svg style="width:12px;height:12px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
-                                    <polyline points="20 6 9 17 4 12"></polyline>
-                                </svg>
-                            </div>
+                        <div style="margin-bottom:10px;display:flex;align-items:center;justify-content:center;">
+                            <svg style="width:40px;height:40px;" viewBox="0 0 24 24" fill="none">
+                                <path d="M12 2a10 10 0 0 1 7.07 2.93l-2.83 2.83A6 6 0 0 0 12 6V2z" fill="#EA4335" />
+                                <path d="M19.07 4.93A10 10 0 0 1 22 12h-4a6 6 0 0 0-1.76-4.24l2.83-2.83z" fill="#FBBC05" />
+                                <path d="M22 12a10 10 0 0 1-10 10v-4a6 6 0 0 0 6-6h4z" fill="#34A853" />
+                                <path d="M12 22A10 10 0 0 1 2 12h4a6 6 0 0 0 6 6v4z" fill="#4285F4" />
+                                <path d="M2 12A10 10 0 0 1 12 2v4a6 6 0 0 0-6 6H2z" fill="#4285F4" opacity="0.85" />
+                            </svg>
                         </div>
 
-                        <div id="gvaultStatusPill" style="display:inline-flex;align-items:center;padding:3px 12px;border-radius:999px;background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;font-size:12px;font-weight:600;margin-bottom:6px;">
-                            OAuth 本地回调已拦截 · 同步触发本机跳转中
-                        </div>
-                        <h1 style="font-size:16px;font-weight:700;color:#202124;margin:2px 0;">已捕获本地回调地址 (localhost)</h1>
+                        <h1 style="font-size:16px;font-weight:700;color:#202124;margin:2px 0;">已捕获回调地址</h1>
                         <p style="font-size:12px;color:#5f6368;margin:4px 0 0 0;">当前授权账号：<span style="font-weight:600;color:#1a73e8;">$safeEmailHtml</span></p>
                         <div id="gvaultLocalSyncNote" style="margin-top:10px;width:100%;padding:8px 12px;border-radius:12px;background:#f0fdf4;border:1px solid #bbf7d0;font-size:11.5px;color:#166534;line-height:1.45;box-sizing:border-box;">
-                            ⚡ 正在后台同步向本机 <code style="font-family:monospace;">$safePortHtml</code> 发送回调请求，同时为您保留当前复制页面…
+                            ⚡ 正在同步将授权结果送达监听服务…
                         </div>
                     </div>
 
@@ -1218,6 +1221,10 @@ class IsolatedBrowserActivity : Activity() {
 
                         <button id="gvaultCopyUrlBtn" type="button" onclick="copyFull()" style="margin-top:10px;width:100%;padding:11px 16px;background:#1a73e8;color:#ffffff;border:none;border-radius:12px;font-size:13px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:8px;box-shadow:0 2px 6px rgba(26,115,232,0.25);">
                             <span id="gvaultCopyBtnText">一键复制完整回调地址</span>
+                        </button>
+
+                        <button id="gvaultJumpBtn" type="button" onclick="jumpToCallback()" style="margin-top:10px;width:100%;padding:10px 16px;background:#ffffff;color:#1a73e8;border:1px solid #dadce0;border-radius:12px;font-size:13px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:8px;">
+                            <span id="gvaultJumpBtnText">跳转回调地址</span>
                         </button>
                     </div>
 
@@ -1256,6 +1263,15 @@ class IsolatedBrowserActivity : Activity() {
                             txt.innerText = '一键复制完整回调地址';
                         }, 2000);
                     }
+                    function jumpToCallback() {
+                        const txt = document.getElementById('gvaultJumpBtnText');
+                        if (txt) txt.innerText = '正在跳转回调地址…';
+                        if (window.GVaultBridge && window.GVaultBridge.jumpToUrl) {
+                            window.GVaultBridge.jumpToUrl(fullUrl);
+                        } else {
+                            window.location.href = fullUrl;
+                        }
+                    }
                     function copyCode() {
                         doCopy(codeVal);
                         const btn = document.getElementById('gvaultCopyCodeBtn');
@@ -1269,23 +1285,20 @@ class IsolatedBrowserActivity : Activity() {
                         }, 2000);
                     }
                     window.__gvaultSetLocalStatus = function(localOk, httpStatus) {
-                        const pill = document.getElementById('gvaultStatusPill');
                         const note = document.getElementById('gvaultLocalSyncNote');
                         if (localOk) {
-                            if (pill) pill.innerText = '✓ 已同步触发本机回调并展示提取页';
                             if (note) {
                                 note.style.background = '#ecfdf5';
                                 note.style.borderColor = '#6ee7b7';
                                 note.style.color = '#065f46';
-                                note.innerHTML = '✓ <b>本机回调已自动完成 (HTTP ' + (httpStatus || 200) + ')</b>：已同步将授权结果送达本机监听服务，同时为您保留下方复制提取面板。';
+                                note.innerHTML = '✓ 回调已完成，已同步将授权结果送达监听服务';
                             }
                         } else {
-                            if (pill) pill.innerText = 'OAuth 本地回调已自动拦截';
                             if (note) {
                                 note.style.background = '#eff6ff';
                                 note.style.borderColor = '#bfdbfe';
                                 note.style.color = '#1e40af';
-                                note.innerHTML = 'ℹ️ 未检测到本机开启该端口监听（一次性授权码未被消耗），请直接点击下方按钮复制回调地址或 Code。';
+                                note.innerHTML = 'ℹ️ 未检测到本机开启该端口监听，请直接点击下方按钮复制回调地址或 Code';
                             }
                         }
                     };
