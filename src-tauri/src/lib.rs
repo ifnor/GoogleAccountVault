@@ -887,17 +887,92 @@ fn build_localhost_callback_html(callback_url: &str, email: &str) -> String {
     <script>
         let fullUrl = {url_json};
         let codeParam = {code_json};
+        let localCallbackDone = false;
+        let capturedResponseHtml = "";
+        let wasOpaqueRedirect = false;
 
         (function syncLocationHash() {{
             try {{
                 if (window.location && /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(:\d+)?(\/|$)/i.test(window.location.href)) {{
-                    if (window.location.href.length > fullUrl.length) {{
+                    if (window.location.href.length > fullUrl.length && !window.location.href.includes("__gvault_")) {{
                         fullUrl = window.location.href;
                         const urlInput = document.getElementById("gvaultUrlInput");
                         if (urlInput) urlInput.value = fullUrl;
                     }}
                 }}
             }} catch (_) {{}}
+        }})();
+
+        window.__gvaultSetLocalStatus = function(localOk) {{
+            localCallbackDone = !!localOk;
+            const note = document.getElementById("gvaultLocalSyncNote");
+            if (localOk) {{
+                if (note) {{
+                    note.style.background = "#ecfdf5";
+                    note.style.borderColor = "#6ee7b7";
+                    note.style.color = "#065f46";
+                    note.innerHTML = "✓ 回调已完成，已同步将授权结果送达监听服务";
+                }}
+            }} else {{
+                if (note) {{
+                    note.style.background = "#eff6ff";
+                    note.style.borderColor = "#bfdbfe";
+                    note.style.color = "#1e40af";
+                    note.innerHTML = "ℹ️ 未检测到本机开启该端口监听，请直接点击下方按钮复制回调地址或 Code";
+                }}
+            }}
+        }};
+
+        (function triggerSilentWebviewCallback() {{
+            let isSameOrigin = false;
+            try {{
+                isSameOrigin = (window.location.origin === new URL(fullUrl).origin);
+            }} catch (_) {{}}
+
+            fetch(fullUrl, {{
+                method: "GET",
+                mode: isSameOrigin ? "same-origin" : "no-cors",
+                credentials: "include",
+                redirect: "manual",
+                cache: "no-store"
+            }})
+            .then(async (resp) => {{
+                window.__gvaultSetLocalStatus(true);
+                if (resp.type === "opaqueredirect" || (resp.status >= 300 && resp.status < 400)) {{
+                    wasOpaqueRedirect = true;
+                    return;
+                }}
+                if (resp.type === "basic" || resp.type === "default") {{
+                    try {{
+                        const text = await resp.text();
+                        if (text && text.trim().length > 0) {{
+                            capturedResponseHtml = text;
+                            if (/<script\b/i.test(text)) {{
+                                const frame = document.createElement("iframe");
+                                frame.style.cssText = "width:1px;height:1px;opacity:0;position:fixed;left:-9999px;bottom:0;border:0;pointer-events:none;";
+                                frame.srcdoc = text;
+                                document.body.appendChild(frame);
+                            }}
+                        }}
+                    }} catch (_) {{}}
+                }}
+            }})
+            .catch(() => {{
+                if (/^http:\/\/localhost(:\d+)?(\/|$)/i.test(fullUrl)) {{
+                    const ipv4Url = fullUrl.replace(/^http:\/\/localhost/i, "http://127.0.0.1");
+                    fetch(ipv4Url, {{
+                        method: "GET",
+                        mode: "no-cors",
+                        credentials: "include",
+                        redirect: "manual",
+                        cache: "no-store"
+                    }})
+                    .then(() => window.__gvaultSetLocalStatus(true))
+                    .catch(() => window.__gvaultSetLocalStatus(false));
+                }} else {{
+                    window.__gvaultSetLocalStatus(false);
+                }}
+            }});
         }})();
 
         function copyTextFallback(text) {{
@@ -937,15 +1012,26 @@ fn build_localhost_callback_html(callback_url: &str, email: &str) -> String {
         function jumpToCallback() {{
             const jumpBtnText = document.getElementById("gvaultJumpBtnText");
             if (jumpBtnText) jumpBtnText.innerText = "正在跳转回调地址…";
+            if (localCallbackDone && capturedResponseHtml) {{
+                try {{
+                    document.open();
+                    document.write(capturedResponseHtml);
+                    document.close();
+                    return;
+                }} catch (_) {{}}
+            }}
+            const targetUrl = (localCallbackDone && wasOpaqueRedirect && window.location && /^https?:\/\//i.test(window.location.origin))
+                ? (window.location.origin + "/")
+                : fullUrl;
             try {{
-                const iframe = document.createElement("iframe");
-                iframe.style.display = "none";
-                iframe.src = "http://localhost/__gvault_passthrough__";
-                document.body.appendChild(iframe);
+                const pFrame = document.createElement("iframe");
+                pFrame.style.display = "none";
+                pFrame.src = "http://localhost/__gvault_passthrough__";
+                document.body.appendChild(pFrame);
             }} catch (_) {{}}
             setTimeout(() => {{
-                window.location.href = fullUrl;
-            }}, 40);
+                window.location.href = targetUrl;
+            }}, 35);
         }}
 
         function copyCode() {{
@@ -964,84 +1050,10 @@ fn build_localhost_callback_html(callback_url: &str, email: &str) -> String {
                 }}, 2000);
             }}
         }}
-
-        window.__gvaultSetLocalStatus = function(localOk, httpStatus) {{
-            const note = document.getElementById("gvaultLocalSyncNote");
-            if (localOk) {{
-                if (note) {{
-                    note.style.background = "#ecfdf5";
-                    note.style.borderColor = "#6ee7b7";
-                    note.style.color = "#065f46";
-                    note.innerHTML = "✓ 回调已完成，已同步将授权结果送达监听服务";
-                }}
-            }} else {{
-                if (note) {{
-                    note.style.background = "#eff6ff";
-                    note.style.borderColor = "#bfdbfe";
-                    note.style.color = "#1e40af";
-                    note.innerHTML = "ℹ️ 未检测到本机开启该端口监听，请直接点击下方按钮复制回调地址或 Code";
-                }}
-            }}
-        }};
     </script>
 </body>
 </html>"###
     )
-}
-
-#[cfg(target_os = "windows")]
-fn trigger_localhost_callback_in_background(window: tauri::WebviewWindow, callback_url: String) {
-    tauri::async_runtime::spawn(async move {
-        let client_res = reqwest::Client::builder()
-            .no_proxy()
-            .timeout(std::time::Duration::from_secs(12))
-            .build();
-
-        let (local_ok, status_code) = if let Ok(client) = client_res {
-            match client.get(&callback_url).send().await {
-                Ok(resp) => (true, resp.status().as_u16()),
-                Err(_) => {
-                    // Fallback: if url used 'localhost', also try explicit 127.0.0.1 in case IPv6 ::1 refused
-                    let mut fallback_res = (false, 0u16);
-                    if let Ok(mut parsed) = tauri::Url::parse(&callback_url) {
-                        if parsed.host_str() == Some("localhost") {
-                            let host_header = match parsed.port() {
-                                Some(p) => format!("localhost:{p}"),
-                                None => "localhost".to_string(),
-                            };
-                            if parsed.set_host(Some("127.0.0.1")).is_ok() {
-                                if let Ok(resp) = client
-                                    .get(parsed.as_str())
-                                    .header("Host", host_header)
-                                    .send()
-                                    .await
-                                {
-                                    fallback_res = (true, resp.status().as_u16());
-                                }
-                            }
-                        }
-                    }
-                    fallback_res
-                }
-            }
-        } else {
-            (false, 0u16)
-        };
-
-        let js = format!(
-            "if (window.__gvaultSetLocalStatus) {{ window.__gvaultSetLocalStatus({}, {}); }}",
-            if local_ok { "true" } else { "false" },
-            status_code
-        );
-        std::thread::spawn(move || {
-            for delay_ms in [0u64, 120, 400, 1000] {
-                if delay_ms > 0 {
-                    std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-                }
-                let _ = window.eval(&js);
-            }
-        });
-    });
 }
 
 #[cfg(target_os = "windows")]
@@ -1050,7 +1062,6 @@ fn attach_webview2_localhost_interceptor(
     email: String,
     initial_localhost_url: Option<String>,
 ) {
-    let win_for_webview = window.clone();
     let _ = window.with_webview(move |webview| {
         unsafe {
             use webview2_com::Microsoft::Web::WebView2::Win32::{
@@ -1089,9 +1100,8 @@ fn attach_webview2_localhost_interceptor(
                 .and_then(|wv2_2| wv2_2.Environment());
 
             let email_for_handler = email.clone();
-            let win_for_handler = win_for_webview.clone();
-            let last_triggered = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
-            let passthrough_once = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let passthrough_until: std::sync::Arc<std::sync::Mutex<Option<std::time::Instant>>> =
+                std::sync::Arc::new(std::sync::Mutex::new(None));
             let handler = WebResourceRequestedEventHandler::create(Box::new(
                 move |wv: Option<ICoreWebView2>,
                       args: Option<ICoreWebView2WebResourceRequestedEventArgs>| {
@@ -1105,7 +1115,9 @@ fn attach_webview2_localhost_interceptor(
                     windows::Win32::System::Com::CoTaskMemFree(Some(uri_pwstr.0 as *const _));
 
                     if uri_str.contains("__gvault_passthrough__") {
-                        passthrough_once.store(true, std::sync::atomic::Ordering::SeqCst);
+                        if let Ok(mut guard) = passthrough_until.lock() {
+                            *guard = Some(std::time::Instant::now() + std::time::Duration::from_secs(10));
+                        }
                         if let Ok(ref env) = env_res {
                             if let Some(stream) = SHCreateMemStream(Some(b"ok")) {
                                 let status_wide: Vec<u16> = "OK".encode_utf16().chain(std::iter::once(0)).collect();
@@ -1127,24 +1139,13 @@ fn attach_webview2_localhost_interceptor(
                     }
 
                     if is_localhost_callback_str(&uri_str) {
-                        if passthrough_once.swap(false, std::sync::atomic::Ordering::SeqCst) {
-                            return Ok(());
-                        }
-                        let should_trigger = if let Ok(mut guard) = last_triggered.lock() {
-                            if *guard != uri_str {
-                                *guard = uri_str.clone();
-                                true
-                            } else {
-                                false
+                        let now = std::time::Instant::now();
+                        if let Ok(guard) = passthrough_until.lock() {
+                            if let Some(until) = *guard {
+                                if now < until {
+                                    return Ok(());
+                                }
                             }
-                        } else {
-                            true
-                        };
-                        if should_trigger {
-                            trigger_localhost_callback_in_background(
-                                win_for_handler.clone(),
-                                uri_str.clone(),
-                            );
                         }
 
                         let html = build_localhost_callback_html(&uri_str, &email_for_handler);
@@ -1181,7 +1182,6 @@ fn attach_webview2_localhost_interceptor(
             let _ = core_wv2.add_WebResourceRequested(&handler, &mut token);
 
             if let Some(init_url) = initial_localhost_url {
-                trigger_localhost_callback_in_background(win_for_webview.clone(), init_url.clone());
                 let html = build_localhost_callback_html(&init_url, &email);
                 let html_wide: Vec<u16> = html.encode_utf16().chain(std::iter::once(0)).collect();
                 let _ = core_wv2.NavigateToString(PCWSTR(html_wide.as_ptr()));
@@ -1563,7 +1563,10 @@ async fn open_in_app_browser(
             }
             #[cfg(target_os = "windows")]
             {
-                builder = builder.additional_browser_args(&format!("--proxy-server={}", clean_proxy));
+                builder = builder.additional_browser_args(&format!(
+                    "--proxy-server={} --proxy-bypass-list=<-loopback>;localhost;127.0.0.1;[::1]",
+                    clean_proxy
+                ));
             }
         }
 

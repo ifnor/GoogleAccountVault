@@ -1318,9 +1318,9 @@ class IsolatedBrowserActivity : Activity() {
             var statusCode = 0
             try {
                 val conn = java.net.URL(callbackUrl).openConnection(java.net.Proxy.NO_PROXY) as java.net.HttpURLConnection
-                conn.connectTimeout = 5000
-                conn.readTimeout = 8000
-                conn.instanceFollowRedirects = true
+                conn.connectTimeout = 4000
+                conn.readTimeout = 6000
+                conn.instanceFollowRedirects = false
                 conn.requestMethod = "GET"
                 statusCode = conn.responseCode
                 localOk = statusCode > 0
