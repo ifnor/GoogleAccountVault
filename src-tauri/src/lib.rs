@@ -1075,25 +1075,136 @@ async fn open_in_app_browser(
     let safe_rec_email_json =
         serde_json::to_string(&recovery_email.as_deref().unwrap_or_default())
             .unwrap_or_else(|_| "\"\"".to_string());
-    let current_totp = totp_secret
+    let normalized_totp_secret = totp_secret
         .as_ref()
-        .and_then(|s| totp::calculate_totp(s).ok())
-        .map(|r| r.code)
+        .and_then(|s| totp::normalize_totp_secret(s).ok())
         .unwrap_or_default();
-    let safe_totp_json =
-        serde_json::to_string(&current_totp).unwrap_or_else(|_| "\"\"".to_string());
+    let safe_totp_secret_json =
+        serde_json::to_string(&normalized_totp_secret).unwrap_or_else(|_| "\"\"".to_string());
 
     let autofill_script = format!(
         r#"
         (function() {{
             const targetEmail = {safe_email_json};
             const targetPassword = {safe_pwd_json};
-            const targetTotp = {safe_totp_json};
+            const targetTotpSecret = {safe_totp_secret_json};
             const targetRecEmail = {safe_rec_email_json};
             let emailFilled = false;
             let pwdFilled = false;
             let totpFilled = false;
+            let lastAutoFilledTotp = "";
             let recEmailFilled = false;
+
+            function base32ToBytes(b32) {{
+                const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+                const clean = (b32 || "").replace(/[^A-Z2-7]/gi, "").toUpperCase();
+                let bits = 0, value = 0;
+                const out = [];
+                for (let i = 0; i < clean.length; i++) {{
+                    const idx = alphabet.indexOf(clean[i]);
+                    if (idx === -1) continue;
+                    value = (value << 5) | idx;
+                    bits += 5;
+                    if (bits >= 8) {{
+                        out.push((value >>> (bits - 8)) & 0xff);
+                        bits -= 8;
+                    }}
+                }}
+                return new Uint8Array(out);
+            }}
+
+            function sha1Bytes(msg) {{
+                const ml = msg.length * 8;
+                const withOne = msg.length + 1;
+                const padLen = (withOne % 64 <= 56 ? 56 : 120) - (withOne % 64);
+                const totalLen = withOne + padLen + 8;
+                const buf = new Uint8Array(totalLen);
+                buf.set(msg, 0);
+                buf[msg.length] = 0x80;
+                const dv = new DataView(buf.buffer);
+                dv.setUint32(totalLen - 4, ml >>> 0, false);
+                dv.setUint32(totalLen - 8, Math.floor(ml / 4294967296) >>> 0, false);
+
+                let h0 = 0x67452301, h1 = 0xefcdab89, h2 = 0x98badcfe, h3 = 0x10325476, h4 = 0xc3d2e1f0;
+                const w = new Int32Array(80);
+                for (let i = 0; i < totalLen; i += 64) {{
+                    for (let j = 0; j < 16; j++) {{
+                        w[j] = dv.getInt32(i + j * 4, false);
+                    }}
+                    for (let j = 16; j < 80; j++) {{
+                        const n = w[j - 3] ^ w[j - 8] ^ w[j - 14] ^ w[j - 16];
+                        w[j] = (n << 1) | (n >>> 31);
+                    }}
+                    let a = h0, b = h1, c = h2, d = h3, e = h4;
+                    for (let j = 0; j < 80; j++) {{
+                        let f, k;
+                        if (j < 20) {{
+                            f = (b & c) | ((~b) & d);
+                            k = 0x5a827999;
+                        }} else if (j < 40) {{
+                            f = b ^ c ^ d;
+                            k = 0x6ed9eba1;
+                        }} else if (j < 60) {{
+                            f = (b & c) | (b & d) | (c & d);
+                            k = 0x8f1bbcdc;
+                        }} else {{
+                            f = b ^ c ^ d;
+                            k = 0xca62c1d6;
+                        }}
+                        const temp = (((a << 5) | (a >>> 27)) + f + e + k + w[j]) | 0;
+                        e = d; d = c; c = (b << 30) | (b >>> 2); b = a; a = temp;
+                    }}
+                    h0 = (h0 + a) | 0;
+                    h1 = (h1 + b) | 0;
+                    h2 = (h2 + c) | 0;
+                    h3 = (h3 + d) | 0;
+                    h4 = (h4 + e) | 0;
+                }}
+                const out = new Uint8Array(20);
+                const outDv = new DataView(out.buffer);
+                outDv.setInt32(0, h0, false);
+                outDv.setInt32(4, h1, false);
+                outDv.setInt32(8, h2, false);
+                outDv.setInt32(12, h3, false);
+                outDv.setInt32(16, h4, false);
+                return out;
+            }}
+
+            function computeRealtimeTotp(secret) {{
+                if (!secret) return "";
+                let key = base32ToBytes(secret);
+                if (!key.length) return "";
+                if (key.length > 64) key = sha1Bytes(key);
+                const ipad = new Uint8Array(64);
+                const opad = new Uint8Array(64);
+                for (let i = 0; i < 64; i++) {{
+                    const b = i < key.length ? key[i] : 0;
+                    ipad[i] = b ^ 0x36;
+                    opad[i] = b ^ 0x5c;
+                }}
+                const counter = Math.floor(Date.now() / 30000);
+                const msg = new Uint8Array(8);
+                const msgDv = new DataView(msg.buffer);
+                msgDv.setUint32(0, Math.floor(counter / 4294967296) >>> 0, false);
+                msgDv.setUint32(4, counter >>> 0, false);
+
+                const innerInput = new Uint8Array(72);
+                innerInput.set(ipad, 0);
+                innerInput.set(msg, 64);
+                const innerHash = sha1Bytes(innerInput);
+
+                const outerInput = new Uint8Array(84);
+                outerInput.set(opad, 0);
+                outerInput.set(innerHash, 64);
+                const hmac = sha1Bytes(outerInput);
+
+                const offset = hmac[19] & 0x0f;
+                const binCode = ((hmac[offset] & 0x7f) << 24) |
+                                ((hmac[offset + 1] & 0xff) << 16) |
+                                ((hmac[offset + 2] & 0xff) << 8) |
+                                (hmac[offset + 3] & 0xff);
+                return String(binCode % 1000000).padStart(6, "0");
+            }}
 
             function autoFill() {{
                 if (!window.location.hostname.includes("google.com")) return;
@@ -1103,7 +1214,7 @@ async fn open_in_app_browser(
                     const emailInput = document.getElementById("identifierId") || 
                                        document.querySelector('input[type="email"]') ||
                                        document.querySelector('input[name="identifier"]');
-                    if (emailInput) {{
+                    if (emailInput && emailInput.offsetParent !== null) {{
                         if (emailInput.value !== targetEmail) {{
                             emailInput.focus();
                             emailInput.value = targetEmail;
@@ -1118,7 +1229,7 @@ async fn open_in_app_browser(
                 if (targetPassword && !pwdFilled) {{
                     const pwdInput = document.querySelector('input[name="Passwd"]') ||
                                      document.querySelector('input[type="password"]');
-                    if (pwdInput) {{
+                    if (pwdInput && pwdInput.offsetParent !== null) {{
                         if (pwdInput.value !== targetPassword) {{
                             pwdInput.focus();
                             pwdInput.value = targetPassword;
@@ -1129,20 +1240,25 @@ async fn open_in_app_browser(
                     }}
                 }}
 
-                // 3. Fill 2FA TOTP code if present
-                if (targetTotp && !totpFilled) {{
+                // 3. Fill 2FA TOTP code in real time (and auto-refresh when 30s period rolls over)
+                if (targetTotpSecret) {{
                     const totpInput = document.querySelector('input[name="totpPin"]') ||
                                       document.getElementById("idvPin") ||
                                       document.querySelector('input[type="tel"][maxlength="6"]') ||
                                       document.querySelector('input[autocomplete="one-time-code"]');
-                    if (totpInput) {{
-                        if (totpInput.value !== targetTotp) {{
-                            totpInput.focus();
-                            totpInput.value = targetTotp;
-                            totpInput.dispatchEvent(new Event("input", {{ bubbles: true }}));
-                            totpInput.dispatchEvent(new Event("change", {{ bubbles: true }}));
+                    if (totpInput && totpInput.offsetParent !== null) {{
+                        const liveTotp = computeRealtimeTotp(targetTotpSecret);
+                        if (liveTotp) {{
+                            const shouldUpdate = !totpFilled || (totpInput.value === lastAutoFilledTotp && totpInput.value !== liveTotp);
+                            if (shouldUpdate && totpInput.value !== liveTotp) {{
+                                totpInput.focus();
+                                totpInput.value = liveTotp;
+                                totpInput.dispatchEvent(new Event("input", {{ bubbles: true }}));
+                                totpInput.dispatchEvent(new Event("change", {{ bubbles: true }}));
+                                lastAutoFilledTotp = liveTotp;
+                                totpFilled = true;
+                            }}
                         }}
-                        totpFilled = true;
                     }}
                 }}
 
@@ -1152,7 +1268,7 @@ async fn open_in_app_browser(
                                      document.querySelector('input[name="knowledgePreregisteredEmailResponse"]') ||
                                      document.querySelector('input[type="email"][aria-label*="辅助"]') ||
                                      document.querySelector('input[type="email"][aria-label*="recovery"]');
-                    if (recInput) {{
+                    if (recInput && recInput.offsetParent !== null) {{
                         if (recInput.value !== targetRecEmail) {{
                             recInput.focus();
                             recInput.value = targetRecEmail;
@@ -1174,7 +1290,7 @@ async fn open_in_app_browser(
             setTimeout(() => {{
                 clearInterval(timer);
                 observer.disconnect();
-            }}, 30000);
+            }}, 600000);
         }})();
         "#
     );
@@ -1186,8 +1302,8 @@ async fn open_in_app_browser(
             safe_email_json,
             safe_pwd_json,
             safe_rec_email_json,
-            current_totp,
-            safe_totp_json,
+            normalized_totp_secret,
+            safe_totp_secret_json,
             autofill_script,
             proxy,
         );

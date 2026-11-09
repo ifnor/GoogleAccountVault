@@ -1043,6 +1043,19 @@ class IsolatedBrowserActivity : Activity() {
                     copyToClipboard("授权回调内容", text)
                 }
             }
+
+            @JavascriptInterface
+            fun getRealtimeTotp(): String {
+                return if (totpSecret.isNotBlank()) {
+                    try {
+                        calculateTotp(totpSecret).first
+                    } catch (_: Throwable) {
+                        currentTotpCode
+                    }
+                } else {
+                    ""
+                }
+            }
         }, "GVaultBridge")
 
         webView.webViewClient = object : WebViewClient() {
@@ -1279,12 +1292,22 @@ class IsolatedBrowserActivity : Activity() {
             (function() {
                 const targetEmail = $emailJson;
                 const targetPassword = $pwdJson;
-                const targetTotp = $totpJson;
+                const fallbackTotp = $totpJson;
                 const targetRec = $recJson;
                 let emailFilled = false;
                 let pwdFilled = false;
                 let totpFilled = false;
+                let lastAutoFilledTotp = "";
                 let recFilled = false;
+
+                function getLiveTotp() {
+                    try {
+                        if (window.GVaultBridge && window.GVaultBridge.getRealtimeTotp) {
+                            return window.GVaultBridge.getRealtimeTotp() || fallbackTotp;
+                        }
+                    } catch (_) {}
+                    return fallbackTotp;
+                }
 
                 function autoFill() {
                     if (!window.location.hostname.includes("google.com")) return;
@@ -1294,7 +1317,7 @@ class IsolatedBrowserActivity : Activity() {
                         const emailInput = document.getElementById("identifierId") || 
                                            document.querySelector('input[type="email"]') ||
                                            document.querySelector('input[name="identifier"]');
-                        if (emailInput && emailInput.value !== targetEmail) {
+                        if (emailInput && emailInput.offsetParent !== null && emailInput.value !== targetEmail) {
                             emailInput.focus();
                             emailInput.value = targetEmail;
                             emailInput.dispatchEvent(new Event("input", { bubbles: true }));
@@ -1307,7 +1330,7 @@ class IsolatedBrowserActivity : Activity() {
                     if (targetPassword && !pwdFilled) {
                         const pwdInput = document.querySelector('input[name="Passwd"]') ||
                                          document.querySelector('input[type="password"]');
-                        if (pwdInput && pwdInput.value !== targetPassword) {
+                        if (pwdInput && pwdInput.offsetParent !== null && pwdInput.value !== targetPassword) {
                             pwdInput.focus();
                             pwdInput.value = targetPassword;
                             pwdInput.dispatchEvent(new Event("input", { bubbles: true }));
@@ -1316,18 +1339,23 @@ class IsolatedBrowserActivity : Activity() {
                         }
                     }
 
-                    // 3. 2FA Code Fill
-                    if (targetTotp && !totpFilled) {
-                        const totpInput = document.querySelector('input[name="totpPin"]') ||
-                                          document.getElementById("idvPin") ||
-                                          document.querySelector('input[type="tel"][maxlength="6"]') ||
-                                          document.querySelector('input[autocomplete="one-time-code"]');
-                        if (totpInput && totpInput.value !== targetTotp) {
-                            totpInput.focus();
-                            totpInput.value = targetTotp;
-                            totpInput.dispatchEvent(new Event("input", { bubbles: true }));
-                            totpInput.dispatchEvent(new Event("change", { bubbles: true }));
-                            totpFilled = true;
+                    // 3. 2FA Code Fill (real-time calculation + auto refresh on 30s rollover)
+                    const totpInput = document.querySelector('input[name="totpPin"]') ||
+                                      document.getElementById("idvPin") ||
+                                      document.querySelector('input[type="tel"][maxlength="6"]') ||
+                                      document.querySelector('input[autocomplete="one-time-code"]');
+                    if (totpInput && totpInput.offsetParent !== null) {
+                        const liveTotp = getLiveTotp();
+                        if (liveTotp) {
+                            const shouldUpdate = !totpFilled || (totpInput.value === lastAutoFilledTotp && totpInput.value !== liveTotp);
+                            if (shouldUpdate && totpInput.value !== liveTotp) {
+                                totpInput.focus();
+                                totpInput.value = liveTotp;
+                                totpInput.dispatchEvent(new Event("input", { bubbles: true }));
+                                totpInput.dispatchEvent(new Event("change", { bubbles: true }));
+                                lastAutoFilledTotp = liveTotp;
+                                totpFilled = true;
+                            }
                         }
                     }
 
@@ -1337,7 +1365,7 @@ class IsolatedBrowserActivity : Activity() {
                                          document.querySelector('input[name="knowledgePreregisteredEmailResponse"]') ||
                                          document.querySelector('input[type="email"][aria-label*="辅助"]') ||
                                          document.querySelector('input[type="email"][aria-label*="recovery"]');
-                        if (recInput && recInput.value !== targetRec) {
+                        if (recInput && recInput.offsetParent !== null && recInput.value !== targetRec) {
                             recInput.focus();
                             recInput.value = targetRec;
                             recInput.dispatchEvent(new Event("input", { bubbles: true }));
@@ -1357,7 +1385,7 @@ class IsolatedBrowserActivity : Activity() {
                 setTimeout(() => {
                     clearInterval(timer);
                     observer.disconnect();
-                }, 30000);
+                }, 600000);
             })();
         """.trimIndent()
 
