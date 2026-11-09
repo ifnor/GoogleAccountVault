@@ -1055,7 +1055,7 @@ class IsolatedBrowserActivity : Activity() {
             fun getRealtimeTotp(): String {
                 return if (totpSecret.isNotBlank()) {
                     try {
-                        calculateTotp(totpSecret).first
+                        TotpHelper.generateTotp(totpSecret).first
                     } catch (_: Throwable) {
                         currentTotpCode
                     }
