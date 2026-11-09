@@ -1077,6 +1077,7 @@ class IsolatedBrowserActivity : Activity() {
             override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
                 val reqUrl = request?.url?.toString() ?: ""
                 if (request?.isForMainFrame == true && isLocalhostCallback(reqUrl)) {
+                    triggerLocalCallbackInBackground(reqUrl)
                     val htmlBytes = buildLocalhostCallbackHtml(reqUrl).toByteArray(Charsets.UTF_8)
                     return WebResourceResponse("text/html", "UTF-8", java.io.ByteArrayInputStream(htmlBytes))
                 }
@@ -1197,11 +1198,14 @@ class IsolatedBrowserActivity : Activity() {
                             </div>
                         </div>
 
-                        <div style="display:inline-flex;align-items:center;padding:3px 12px;border-radius:999px;background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;font-size:12px;font-weight:600;margin-bottom:6px;">
-                            OAuth 本地回调已自动拦截
+                        <div id="gvaultStatusPill" style="display:inline-flex;align-items:center;padding:3px 12px;border-radius:999px;background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;font-size:12px;font-weight:600;margin-bottom:6px;">
+                            OAuth 本地回调已拦截 · 同步触发本机跳转中
                         </div>
                         <h1 style="font-size:16px;font-weight:700;color:#202124;margin:2px 0;">已捕获本地回调地址 (localhost)</h1>
                         <p style="font-size:12px;color:#5f6368;margin:4px 0 0 0;">当前授权账号：<span style="font-weight:600;color:#1a73e8;">$safeEmailHtml</span></p>
+                        <div id="gvaultLocalSyncNote" style="margin-top:10px;width:100%;padding:8px 12px;border-radius:12px;background:#f0fdf4;border:1px solid #bbf7d0;font-size:11.5px;color:#166534;line-height:1.45;box-sizing:border-box;">
+                            ⚡ 正在后台同步向本机 <code style="font-family:monospace;">$safePortHtml</code> 发送回调请求，同时为您保留当前复制页面…
+                        </div>
                     </div>
 
                     <div>
@@ -1264,14 +1268,67 @@ class IsolatedBrowserActivity : Activity() {
                             btn.style.color = '#1a73e8';
                         }, 2000);
                     }
+                    window.__gvaultSetLocalStatus = function(localOk, httpStatus) {
+                        const pill = document.getElementById('gvaultStatusPill');
+                        const note = document.getElementById('gvaultLocalSyncNote');
+                        if (localOk) {
+                            if (pill) pill.innerText = '✓ 已同步触发本机回调并展示提取页';
+                            if (note) {
+                                note.style.background = '#ecfdf5';
+                                note.style.borderColor = '#6ee7b7';
+                                note.style.color = '#065f46';
+                                note.innerHTML = '✓ <b>本机回调已自动完成 (HTTP ' + (httpStatus || 200) + ')</b>：已同步将授权结果送达本机监听服务，同时为您保留下方复制提取面板。';
+                            }
+                        } else {
+                            if (pill) pill.innerText = 'OAuth 本地回调已自动拦截';
+                            if (note) {
+                                note.style.background = '#eff6ff';
+                                note.style.borderColor = '#bfdbfe';
+                                note.style.color = '#1e40af';
+                                note.innerHTML = 'ℹ️ 未检测到本机开启该端口监听（一次性授权码未被消耗），请直接点击下方按钮复制回调地址或 Code。';
+                            }
+                        }
+                    };
                 </script>
             </body>
             </html>
         """.trimIndent()
     }
 
+    private var lastTriggeredLocalUrl: String = ""
+
+    private fun triggerLocalCallbackInBackground(callbackUrl: String) {
+        if (callbackUrl.isBlank() || callbackUrl == lastTriggeredLocalUrl) return
+        lastTriggeredLocalUrl = callbackUrl
+        Thread {
+            var localOk = false
+            var statusCode = 0
+            try {
+                val conn = java.net.URL(callbackUrl).openConnection(java.net.Proxy.NO_PROXY) as java.net.HttpURLConnection
+                conn.connectTimeout = 5000
+                conn.readTimeout = 8000
+                conn.instanceFollowRedirects = true
+                conn.requestMethod = "GET"
+                statusCode = conn.responseCode
+                localOk = statusCode > 0
+                conn.disconnect()
+            } catch (_: Throwable) {
+                localOk = false
+            }
+            val js = "if(window.__gvaultSetLocalStatus){window.__gvaultSetLocalStatus($localOk,$statusCode);}"
+            for (delay in listOf(0L, 150L, 500L)) {
+                mainHandler.postDelayed({
+                    if (::webView.isInitialized) {
+                        webView.evaluateJavascript(js, null)
+                    }
+                }, delay)
+            }
+        }.start()
+    }
+
     private fun renderLocalhostCallbackPage(callbackUrl: String) {
         if (!::webView.isInitialized) return
+        triggerLocalCallbackInBackground(callbackUrl)
         val html = buildLocalhostCallbackHtml(callbackUrl)
         webView.loadDataWithBaseURL("https://localhost/", html, "text/html", "UTF-8", null)
     }

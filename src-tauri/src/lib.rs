@@ -855,11 +855,14 @@ fn build_localhost_callback_html(callback_url: &str, email: &str) -> String {
                 </div>
             </div>
 
-            <div style="display:inline-flex;align-items:center;padding:3px 12px;border-radius:999px;background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;font-size:12px;font-weight:600;margin-bottom:6px;">
-                OAuth 本地回调已自动拦截
+            <div id="gvaultStatusPill" style="display:inline-flex;align-items:center;padding:4px 12px;border-radius:999px;background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;font-size:12px;font-weight:600;margin-bottom:6px;transition:all 0.2s;">
+                OAuth 本地回调已拦截 · 同步触发本机跳转中
             </div>
             <h1 style="font-size:17px;font-weight:700;color:#202124;margin:2px 0;">已捕获本地回调地址 (localhost)</h1>
             <p style="font-size:12px;color:#5f6368;margin:4px 0 0 0;">当前授权账号：<span style="font-weight:600;color:#1a73e8;">{safe_email_html}</span></p>
+            <div id="gvaultLocalSyncNote" style="margin-top:10px;width:100%;padding:8px 12px;border-radius:12px;background:#f0fdf4;border:1px solid #bbf7d0;font-size:11.5px;color:#166534;line-height:1.45;box-sizing:border-box;">
+                ⚡ 正在后台同步向本机 <code style="font-family:Consolas,monospace;">{safe_port_html}</code> 发送回调请求，同时为您保留当前复制页面…
+            </div>
         </div>
 
         <div>
@@ -948,10 +951,94 @@ fn build_localhost_callback_html(callback_url: &str, email: &str) -> String {
                 }}, 2000);
             }}
         }}
+
+        window.__gvaultSetLocalStatus = function(localOk, httpStatus) {{
+            const pill = document.getElementById("gvaultStatusPill");
+            const note = document.getElementById("gvaultLocalSyncNote");
+            if (localOk) {{
+                if (pill) {{
+                    pill.innerText = "✓ 已同步触发本机回调并展示提取页";
+                    pill.style.background = "#ecfdf5";
+                    pill.style.color = "#047857";
+                    pill.style.borderColor = "#6ee7b7";
+                }}
+                if (note) {{
+                    note.style.background = "#ecfdf5";
+                    note.style.borderColor = "#6ee7b7";
+                    note.style.color = "#065f46";
+                    note.innerHTML = "✓ <b>本机回调已自动完成 (HTTP " + (httpStatus || 200) + ")</b>：已同步将授权结果送达本机监听服务，同时为您保留下方复制提取面板。";
+                }}
+            }} else {{
+                if (pill) {{
+                    pill.innerText = "OAuth 本地回调已自动拦截";
+                }}
+                if (note) {{
+                    note.style.background = "#eff6ff";
+                    note.style.borderColor = "#bfdbfe";
+                    note.style.color = "#1e40af";
+                    note.innerHTML = "ℹ️ 未检测到本机开启该端口监听（一次性授权码未被消耗），请直接点击下方按钮复制回调地址或 Code。";
+                }}
+            }}
+        }};
     </script>
 </body>
 </html>"###
     )
+}
+
+#[cfg(target_os = "windows")]
+fn trigger_localhost_callback_in_background(window: tauri::WebviewWindow, callback_url: String) {
+    tauri::async_runtime::spawn(async move {
+        let client_res = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(12))
+            .build();
+
+        let (local_ok, status_code) = if let Ok(client) = client_res {
+            match client.get(&callback_url).send().await {
+                Ok(resp) => (true, resp.status().as_u16()),
+                Err(_) => {
+                    // Fallback: if url used 'localhost', also try explicit 127.0.0.1 in case IPv6 ::1 refused
+                    let mut fallback_res = (false, 0u16);
+                    if let Ok(mut parsed) = tauri::Url::parse(&callback_url) {
+                        if parsed.host_str() == Some("localhost") {
+                            let host_header = match parsed.port() {
+                                Some(p) => format!("localhost:{p}"),
+                                None => "localhost".to_string(),
+                            };
+                            if parsed.set_host(Some("127.0.0.1")).is_ok() {
+                                if let Ok(resp) = client
+                                    .get(parsed.as_str())
+                                    .header("Host", host_header)
+                                    .send()
+                                    .await
+                                {
+                                    fallback_res = (true, resp.status().as_u16());
+                                }
+                            }
+                        }
+                    }
+                    fallback_res
+                }
+            }
+        } else {
+            (false, 0u16)
+        };
+
+        let js = format!(
+            "if (window.__gvaultSetLocalStatus) {{ window.__gvaultSetLocalStatus({}, {}); }}",
+            if local_ok { "true" } else { "false" },
+            status_code
+        );
+        std::thread::spawn(move || {
+            for delay_ms in [0u64, 120, 400, 1000] {
+                if delay_ms > 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                }
+                let _ = window.eval(&js);
+            }
+        });
+    });
 }
 
 #[cfg(target_os = "windows")]
@@ -960,6 +1047,7 @@ fn attach_webview2_localhost_interceptor(
     email: String,
     initial_localhost_url: Option<String>,
 ) {
+    let win_for_webview = window.clone();
     let _ = window.with_webview(move |webview| {
         unsafe {
             use webview2_com::Microsoft::Web::WebView2::Win32::{
@@ -998,6 +1086,8 @@ fn attach_webview2_localhost_interceptor(
                 .and_then(|wv2_2| wv2_2.Environment());
 
             let email_for_handler = email.clone();
+            let win_for_handler = win_for_webview.clone();
+            let last_triggered = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
             let handler = WebResourceRequestedEventHandler::create(Box::new(
                 move |wv: Option<ICoreWebView2>,
                       args: Option<ICoreWebView2WebResourceRequestedEventArgs>| {
@@ -1011,6 +1101,23 @@ fn attach_webview2_localhost_interceptor(
                     windows::Win32::System::Com::CoTaskMemFree(Some(uri_pwstr.0 as *const _));
 
                     if is_localhost_callback_str(&uri_str) {
+                        let should_trigger = if let Ok(mut guard) = last_triggered.lock() {
+                            if *guard != uri_str {
+                                *guard = uri_str.clone();
+                                true
+                            } else {
+                                false
+                            }
+                        } else {
+                            true
+                        };
+                        if should_trigger {
+                            trigger_localhost_callback_in_background(
+                                win_for_handler.clone(),
+                                uri_str.clone(),
+                            );
+                        }
+
                         let html = build_localhost_callback_html(&uri_str, &email_for_handler);
                         if let Ok(ref env) = env_res {
                             let bytes = html.as_bytes();
@@ -1045,6 +1152,7 @@ fn attach_webview2_localhost_interceptor(
             let _ = core_wv2.add_WebResourceRequested(&handler, &mut token);
 
             if let Some(init_url) = initial_localhost_url {
+                trigger_localhost_callback_in_background(win_for_webview.clone(), init_url.clone());
                 let html = build_localhost_callback_html(&init_url, &email);
                 let html_wide: Vec<u16> = html.encode_utf16().chain(std::iter::once(0)).collect();
                 let _ = core_wv2.NavigateToString(PCWSTR(html_wide.as_ptr()));
