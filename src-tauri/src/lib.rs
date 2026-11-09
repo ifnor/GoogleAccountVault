@@ -887,9 +887,7 @@ fn build_localhost_callback_html(callback_url: &str, email: &str) -> String {
     <script>
         let fullUrl = {url_json};
         let codeParam = {code_json};
-        let localCallbackDone = false;
-        let capturedResponseHtml = "";
-        let wasOpaqueRedirect = false;
+        let jumpResetTimer = null;
 
         (function syncLocationHash() {{
             try {{
@@ -903,15 +901,22 @@ fn build_localhost_callback_html(callback_url: &str, email: &str) -> String {
             }} catch (_) {{}}
         }})();
 
-        window.__gvaultSetLocalStatus = function(localOk) {{
-            localCallbackDone = !!localOk;
+        window.__gvaultSetLocalStatus = function(localOk, isManual) {{
             const note = document.getElementById("gvaultLocalSyncNote");
+            const jumpBtn = document.getElementById("gvaultJumpBtn");
+            const jumpBtnText = document.getElementById("gvaultJumpBtnText");
             if (localOk) {{
                 if (note) {{
                     note.style.background = "#ecfdf5";
                     note.style.borderColor = "#6ee7b7";
                     note.style.color = "#065f46";
                     note.innerHTML = "✓ 回调已完成，已同步将授权结果送达监听服务";
+                }}
+                if (isManual && jumpBtn && jumpBtnText) {{
+                    jumpBtn.style.background = "#ecfdf5";
+                    jumpBtn.style.color = "#047857";
+                    jumpBtn.style.borderColor = "#6ee7b7";
+                    jumpBtnText.innerText = "✓ 已完成回调地址跳转！";
                 }}
             }} else {{
                 if (note) {{
@@ -920,60 +925,23 @@ fn build_localhost_callback_html(callback_url: &str, email: &str) -> String {
                     note.style.color = "#1e40af";
                     note.innerHTML = "ℹ️ 未检测到本机开启该端口监听，请直接点击下方按钮复制回调地址或 Code";
                 }}
+                if (isManual && jumpBtn && jumpBtnText) {{
+                    jumpBtn.style.background = "#eff6ff";
+                    jumpBtn.style.color = "#1e40af";
+                    jumpBtn.style.borderColor = "#bfdbfe";
+                    jumpBtnText.innerText = "✓ 已触发回调（本机未监听该端口）";
+                }}
+            }}
+            if (isManual && jumpBtn && jumpBtnText) {{
+                if (jumpResetTimer) clearTimeout(jumpResetTimer);
+                jumpResetTimer = setTimeout(() => {{
+                    jumpBtn.style.background = "#ffffff";
+                    jumpBtn.style.color = "#1a73e8";
+                    jumpBtn.style.borderColor = "#dadce0";
+                    jumpBtnText.innerText = "跳转回调地址";
+                }}, 2200);
             }}
         }};
-
-        (function triggerSilentWebviewCallback() {{
-            let isSameOrigin = false;
-            try {{
-                isSameOrigin = (window.location.origin === new URL(fullUrl).origin);
-            }} catch (_) {{}}
-
-            fetch(fullUrl, {{
-                method: "GET",
-                mode: isSameOrigin ? "same-origin" : "no-cors",
-                credentials: "include",
-                redirect: "manual",
-                cache: "no-store"
-            }})
-            .then(async (resp) => {{
-                window.__gvaultSetLocalStatus(true);
-                if (resp.type === "opaqueredirect" || (resp.status >= 300 && resp.status < 400)) {{
-                    wasOpaqueRedirect = true;
-                    return;
-                }}
-                if (resp.type === "basic" || resp.type === "default") {{
-                    try {{
-                        const text = await resp.text();
-                        if (text && text.trim().length > 0) {{
-                            capturedResponseHtml = text;
-                            if (/<script\b/i.test(text)) {{
-                                const frame = document.createElement("iframe");
-                                frame.style.cssText = "width:1px;height:1px;opacity:0;position:fixed;left:-9999px;bottom:0;border:0;pointer-events:none;";
-                                frame.srcdoc = text;
-                                document.body.appendChild(frame);
-                            }}
-                        }}
-                    }} catch (_) {{}}
-                }}
-            }})
-            .catch(() => {{
-                if (/^http:\/\/localhost(:\d+)?(\/|$)/i.test(fullUrl)) {{
-                    const ipv4Url = fullUrl.replace(/^http:\/\/localhost/i, "http://127.0.0.1");
-                    fetch(ipv4Url, {{
-                        method: "GET",
-                        mode: "no-cors",
-                        credentials: "include",
-                        redirect: "manual",
-                        cache: "no-store"
-                    }})
-                    .then(() => window.__gvaultSetLocalStatus(true))
-                    .catch(() => window.__gvaultSetLocalStatus(false));
-                }} else {{
-                    window.__gvaultSetLocalStatus(false);
-                }}
-            }});
-        }})();
 
         function copyTextFallback(text) {{
             if (navigator.clipboard && navigator.clipboard.writeText) {{
@@ -1010,28 +978,36 @@ fn build_localhost_callback_html(callback_url: &str, email: &str) -> String {
         }}
 
         function jumpToCallback() {{
+            const jumpBtn = document.getElementById("gvaultJumpBtn");
             const jumpBtnText = document.getElementById("gvaultJumpBtnText");
-            if (jumpBtnText) jumpBtnText.innerText = "正在跳转回调地址…";
-            if (localCallbackDone && capturedResponseHtml) {{
-                try {{
-                    document.open();
-                    document.write(capturedResponseHtml);
-                    document.close();
-                    return;
-                }} catch (_) {{}}
+            const note = document.getElementById("gvaultLocalSyncNote");
+            if (jumpBtnText) jumpBtnText.innerText = "正在触发回调地址…";
+            if (note) {{
+                note.style.background = "#f0fdf4";
+                note.style.borderColor = "#bbf7d0";
+                note.style.color = "#166534";
+                note.innerHTML = "⚡ 正在同步将授权结果送达监听服务…";
             }}
-            const targetUrl = (localCallbackDone && wasOpaqueRedirect && window.location && /^https?:\/\//i.test(window.location.origin))
-                ? (window.location.origin + "/")
-                : fullUrl;
             try {{
+                const oldFrame = document.getElementById("gvaultManualTriggerFrame");
+                if (oldFrame && oldFrame.parentNode) oldFrame.parentNode.removeChild(oldFrame);
                 const pFrame = document.createElement("iframe");
+                pFrame.id = "gvaultManualTriggerFrame";
                 pFrame.style.display = "none";
-                pFrame.src = "http://localhost/__gvault_passthrough__";
+                pFrame.src = "http://localhost/__gvault_manual_callback__?t=" + Date.now();
                 document.body.appendChild(pFrame);
             }} catch (_) {{}}
-            setTimeout(() => {{
-                window.location.href = targetUrl;
-            }}, 35);
+            if (jumpResetTimer) clearTimeout(jumpResetTimer);
+            jumpResetTimer = setTimeout(() => {{
+                if (jumpBtn) {{
+                    jumpBtn.style.background = "#ffffff";
+                    jumpBtn.style.color = "#1a73e8";
+                    jumpBtn.style.borderColor = "#dadce0";
+                }}
+                if (jumpBtnText && jumpBtnText.innerText === "正在触发回调地址…") {{
+                    jumpBtnText.innerText = "跳转回调地址";
+                }}
+            }}, 3500);
         }}
 
         function copyCode() {{
@@ -1057,11 +1033,92 @@ fn build_localhost_callback_html(callback_url: &str, email: &str) -> String {
 }
 
 #[cfg(target_os = "windows")]
+fn trigger_localhost_callback_in_background(
+    window: tauri::WebviewWindow,
+    callback_url: String,
+    is_manual: bool,
+) {
+    tauri::async_runtime::spawn(async move {
+        let client_res = reqwest::Client::builder()
+            .no_proxy()
+            .connect_timeout(std::time::Duration::from_millis(1200))
+            .timeout(std::time::Duration::from_secs(8))
+            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                let host = attempt.url().host_str().unwrap_or("");
+                if host.eq_ignore_ascii_case("localhost")
+                    || host == "127.0.0.1"
+                    || host == "::1"
+                    || host == "[::1]"
+                {
+                    if attempt.previous().len() >= 5 {
+                        attempt.stop()
+                    } else {
+                        attempt.follow()
+                    }
+                } else {
+                    attempt.stop()
+                }
+            }))
+            .build();
+
+        let local_ok = if let Ok(client) = client_res {
+            let mut ok = false;
+            if let Ok(mut parsed) = tauri::Url::parse(&callback_url) {
+                if parsed.host_str().map(|h| h.eq_ignore_ascii_case("localhost")).unwrap_or(false) {
+                    let host_header = match parsed.port() {
+                        Some(p) => format!("localhost:{p}"),
+                        None => "localhost".to_string(),
+                    };
+                    if parsed.set_host(Some("127.0.0.1")).is_ok() {
+                        if client
+                            .get(parsed.as_str())
+                            .header("Host", host_header)
+                            .send()
+                            .await
+                            .is_ok()
+                        {
+                            ok = true;
+                        }
+                    }
+                }
+            }
+            if !ok {
+                ok = client.get(&callback_url).send().await.is_ok();
+            }
+            ok
+        } else {
+            false
+        };
+
+        let js = format!(
+            "if (window.__gvaultSetLocalStatus) {{ window.__gvaultSetLocalStatus({}, {}); }}",
+            if local_ok { "true" } else { "false" },
+            if is_manual { "true" } else { "false" }
+        );
+        std::thread::spawn(move || {
+            let delays: &[u64] = if is_manual {
+                &[0, 100]
+            } else {
+                &[0, 120, 400, 1000]
+            };
+            for &delay_ms in delays {
+                if delay_ms > 0 {
+                    std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                }
+                let _ = window.eval(&js);
+            }
+        });
+    });
+}
+
+#[cfg(target_os = "windows")]
 fn attach_webview2_localhost_interceptor(
     window: &tauri::WebviewWindow,
     email: String,
     initial_localhost_url: Option<String>,
 ) {
+    let win_for_webview = window.clone();
     let _ = window.with_webview(move |webview| {
         unsafe {
             use webview2_com::Microsoft::Web::WebView2::Win32::{
@@ -1100,8 +1157,11 @@ fn attach_webview2_localhost_interceptor(
                 .and_then(|wv2_2| wv2_2.Environment());
 
             let email_for_handler = email.clone();
-            let passthrough_until: std::sync::Arc<std::sync::Mutex<Option<std::time::Instant>>> =
-                std::sync::Arc::new(std::sync::Mutex::new(None));
+            let win_for_handler = win_for_webview.clone();
+            let latest_callback_url = std::sync::Arc::new(std::sync::Mutex::new(
+                initial_localhost_url.clone().unwrap_or_default(),
+            ));
+            let last_auto_triggered = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
             let handler = WebResourceRequestedEventHandler::create(Box::new(
                 move |wv: Option<ICoreWebView2>,
                       args: Option<ICoreWebView2WebResourceRequestedEventArgs>| {
@@ -1114,9 +1174,18 @@ fn attach_webview2_localhost_interceptor(
                     let uri_str = uri_pwstr.to_string().unwrap_or_default();
                     windows::Win32::System::Com::CoTaskMemFree(Some(uri_pwstr.0 as *const _));
 
-                    if uri_str.contains("__gvault_passthrough__") {
-                        if let Ok(mut guard) = passthrough_until.lock() {
-                            *guard = Some(std::time::Instant::now() + std::time::Duration::from_secs(10));
+                    if uri_str.contains("__gvault_manual_callback__") {
+                        let cb_url = latest_callback_url
+                            .lock()
+                            .ok()
+                            .map(|g| g.clone())
+                            .unwrap_or_default();
+                        if !cb_url.is_empty() {
+                            trigger_localhost_callback_in_background(
+                                win_for_handler.clone(),
+                                cb_url,
+                                true,
+                            );
                         }
                         if let Ok(ref env) = env_res {
                             if let Some(stream) = SHCreateMemStream(Some(b"ok")) {
@@ -1139,13 +1208,25 @@ fn attach_webview2_localhost_interceptor(
                     }
 
                     if is_localhost_callback_str(&uri_str) {
-                        let now = std::time::Instant::now();
-                        if let Ok(guard) = passthrough_until.lock() {
-                            if let Some(until) = *guard {
-                                if now < until {
-                                    return Ok(());
-                                }
+                        if let Ok(mut guard) = latest_callback_url.lock() {
+                            *guard = uri_str.clone();
+                        }
+                        let should_auto = if let Ok(mut guard) = last_auto_triggered.lock() {
+                            if *guard != uri_str {
+                                *guard = uri_str.clone();
+                                true
+                            } else {
+                                false
                             }
+                        } else {
+                            true
+                        };
+                        if should_auto {
+                            trigger_localhost_callback_in_background(
+                                win_for_handler.clone(),
+                                uri_str.clone(),
+                                false,
+                            );
                         }
 
                         let html = build_localhost_callback_html(&uri_str, &email_for_handler);
@@ -1182,6 +1263,11 @@ fn attach_webview2_localhost_interceptor(
             let _ = core_wv2.add_WebResourceRequested(&handler, &mut token);
 
             if let Some(init_url) = initial_localhost_url {
+                trigger_localhost_callback_in_background(
+                    win_for_webview.clone(),
+                    init_url.clone(),
+                    false,
+                );
                 let html = build_localhost_callback_html(&init_url, &email);
                 let html_wide: Vec<u16> = html.encode_utf16().chain(std::iter::once(0)).collect();
                 let _ = core_wv2.NavigateToString(PCWSTR(html_wide.as_ptr()));

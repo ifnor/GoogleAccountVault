@@ -1047,10 +1047,7 @@ class IsolatedBrowserActivity : Activity() {
             @JavascriptInterface
             fun jumpToUrl(url: String) {
                 mainHandler.post {
-                    allowLocalhostPassthrough = true
-                    if (::webView.isInitialized) {
-                        webView.loadUrl(url)
-                    }
+                    triggerLocalCallbackInBackground(url, isManual = true)
                 }
             }
 
@@ -1263,13 +1260,19 @@ class IsolatedBrowserActivity : Activity() {
                             txt.innerText = '一键复制完整回调地址';
                         }, 2000);
                     }
+                    let jumpResetTimer = null;
                     function jumpToCallback() {
                         const txt = document.getElementById('gvaultJumpBtnText');
-                        if (txt) txt.innerText = '正在跳转回调地址…';
+                        const note = document.getElementById('gvaultLocalSyncNote');
+                        if (txt) txt.innerText = '正在触发回调地址…';
+                        if (note) {
+                            note.style.background = '#f0fdf4';
+                            note.style.borderColor = '#bbf7d0';
+                            note.style.color = '#166534';
+                            note.innerHTML = '⚡ 正在同步将授权结果送达监听服务…';
+                        }
                         if (window.GVaultBridge && window.GVaultBridge.jumpToUrl) {
                             window.GVaultBridge.jumpToUrl(fullUrl);
-                        } else {
-                            window.location.href = fullUrl;
                         }
                     }
                     function copyCode() {
@@ -1284,14 +1287,22 @@ class IsolatedBrowserActivity : Activity() {
                             btn.style.color = '#1a73e8';
                         }, 2000);
                     }
-                    window.__gvaultSetLocalStatus = function(localOk, httpStatus) {
+                    window.__gvaultSetLocalStatus = function(localOk, isManual) {
                         const note = document.getElementById('gvaultLocalSyncNote');
+                        const jumpBtn = document.getElementById('gvaultJumpBtn');
+                        const jumpBtnText = document.getElementById('gvaultJumpBtnText');
                         if (localOk) {
                             if (note) {
                                 note.style.background = '#ecfdf5';
                                 note.style.borderColor = '#6ee7b7';
                                 note.style.color = '#065f46';
                                 note.innerHTML = '✓ 回调已完成，已同步将授权结果送达监听服务';
+                            }
+                            if (isManual && jumpBtn && jumpBtnText) {
+                                jumpBtn.style.background = '#ecfdf5';
+                                jumpBtn.style.color = '#047857';
+                                jumpBtn.style.borderColor = '#6ee7b7';
+                                jumpBtnText.innerText = '✓ 已完成回调地址跳转！';
                             }
                         } else {
                             if (note) {
@@ -1300,6 +1311,21 @@ class IsolatedBrowserActivity : Activity() {
                                 note.style.color = '#1e40af';
                                 note.innerHTML = 'ℹ️ 未检测到本机开启该端口监听，请直接点击下方按钮复制回调地址或 Code';
                             }
+                            if (isManual && jumpBtn && jumpBtnText) {
+                                jumpBtn.style.background = '#eff6ff';
+                                jumpBtn.style.color = '#1e40af';
+                                jumpBtn.style.borderColor = '#bfdbfe';
+                                jumpBtnText.innerText = '✓ 已触发回调（本机未监听该端口）';
+                            }
+                        }
+                        if (isManual && jumpBtn && jumpBtnText) {
+                            if (jumpResetTimer) clearTimeout(jumpResetTimer);
+                            jumpResetTimer = setTimeout(() => {
+                                jumpBtn.style.background = '#ffffff';
+                                jumpBtn.style.color = '#1a73e8';
+                                jumpBtn.style.borderColor = '#dadce0';
+                                jumpBtnText.innerText = '跳转回调地址';
+                            }, 2200);
                         }
                     };
                 </script>
@@ -1310,26 +1336,27 @@ class IsolatedBrowserActivity : Activity() {
 
     private var lastTriggeredLocalUrl: String = ""
 
-    private fun triggerLocalCallbackInBackground(callbackUrl: String) {
-        if (callbackUrl.isBlank() || callbackUrl == lastTriggeredLocalUrl) return
+    private fun triggerLocalCallbackInBackground(callbackUrl: String, isManual: Boolean = false) {
+        if (callbackUrl.isBlank()) return
+        if (!isManual && callbackUrl == lastTriggeredLocalUrl) return
         lastTriggeredLocalUrl = callbackUrl
         Thread {
             var localOk = false
-            var statusCode = 0
             try {
                 val conn = java.net.URL(callbackUrl).openConnection(java.net.Proxy.NO_PROXY) as java.net.HttpURLConnection
                 conn.connectTimeout = 4000
                 conn.readTimeout = 6000
                 conn.instanceFollowRedirects = false
                 conn.requestMethod = "GET"
-                statusCode = conn.responseCode
+                val statusCode = conn.responseCode
                 localOk = statusCode > 0
                 conn.disconnect()
             } catch (_: Throwable) {
                 localOk = false
             }
-            val js = "if(window.__gvaultSetLocalStatus){window.__gvaultSetLocalStatus($localOk,$statusCode);}"
-            for (delay in listOf(0L, 150L, 500L)) {
+            val js = "if(window.__gvaultSetLocalStatus){window.__gvaultSetLocalStatus($localOk,$isManual);}"
+            val delays = if (isManual) listOf(0L, 120L) else listOf(0L, 150L, 500L)
+            for (delay in delays) {
                 mainHandler.postDelayed({
                     if (::webView.isInitialized) {
                         webView.evaluateJavascript(js, null)
