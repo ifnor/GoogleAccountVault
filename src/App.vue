@@ -1404,6 +1404,102 @@ function handleOpenCustomUrl() {
   openInApp(url);
 }
 
+// ==================== EXTERNAL BROWSER LAUNCH TAKEOVER (60s) ====================
+const isTakeoverActive = ref(false);
+const takeoverRemainingSec = ref(60);
+const takeoverTargetRecord = ref<AccountRecord | null>(null);
+let takeoverPollTimer: ReturnType<typeof setInterval> | null = null;
+let takeoverCountdownTimer: ReturnType<typeof setInterval> | null = null;
+let isHandlingTakeoverUrl = false;
+
+async function stopBrowserTakeover(showManualToast = false) {
+  if (takeoverPollTimer) {
+    clearInterval(takeoverPollTimer);
+    takeoverPollTimer = null;
+  }
+  if (takeoverCountdownTimer) {
+    clearInterval(takeoverCountdownTimer);
+    takeoverCountdownTimer = null;
+  }
+  isTakeoverActive.value = false;
+  takeoverTargetRecord.value = null;
+  try {
+    await invoke("stop_browser_takeover");
+  } catch (_) {}
+  if (showManualToast) {
+    notify("已停止外部跳转临时接管", "info", 1800);
+  }
+}
+
+async function toggleBrowserTakeover(record?: AccountRecord | null) {
+  const target = record || selectedRecord.value;
+  if (!target) return;
+
+  if (isTakeoverActive.value && takeoverTargetRecord.value?.id === target.id) {
+    await stopBrowserTakeover(true);
+    return;
+  }
+
+  await stopBrowserTakeover(false);
+  takeoverTargetRecord.value = target;
+  takeoverRemainingSec.value = 60;
+  isTakeoverActive.value = true;
+  isHandlingTakeoverUrl = false;
+
+  try {
+    await invoke("start_browser_takeover", { durationSecs: 60 });
+  } catch (err: any) {
+    isTakeoverActive.value = false;
+    notify("启动外部跳转接管失败: " + err, "error");
+    return;
+  }
+
+  notify(
+    `🎯 已开启 60s 临时接管（${target.email}）：请在外部软件点击登录或复制授权链接`,
+    "info",
+    4200
+  );
+
+  takeoverCountdownTimer = setInterval(() => {
+    if (!isTakeoverActive.value) return;
+    takeoverRemainingSec.value -= 1;
+    if (takeoverRemainingSec.value <= 0) {
+      stopBrowserTakeover(false);
+      notify("外部跳转临时接管已超时自动结束", "info", 2200);
+    }
+  }, 1000);
+
+  takeoverPollTimer = setInterval(async () => {
+    if (!isTakeoverActive.value || isHandlingTakeoverUrl) return;
+    try {
+      const capturedUrl = await invoke<string | null>("poll_browser_takeover", {
+        clipboardText: null
+      });
+      if (capturedUrl && isTakeoverActive.value) {
+        isHandlingTakeoverUrl = true;
+        const acc = takeoverTargetRecord.value || selectedRecord.value;
+        await stopBrowserTakeover(false);
+        showCustomUrlModal.value = false;
+        if (acc) {
+          notify(
+            `✓ 已成功接管外部跳转，正在用 ${acc.email} 独立会话打开...`,
+            "success",
+            3600
+          );
+          await invoke("open_in_app_browser", {
+            email: acc.email,
+            password: acc.password || "",
+            totpSecret: acc.totp || "",
+            recoveryEmail: acc.recovery_email || "",
+            proxy: acc.proxy || "",
+            url: capturedUrl
+          });
+        }
+      }
+    } catch (_) {}
+  }, 220);
+}
+
 // ==================== 1. BACKUP CODES MANAGEMENT ====================
 const showBackupCodesModal = ref(false);
 const backupCodesRawInput = ref("");
@@ -2515,6 +2611,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  stopBrowserTakeover(false);
   if (totpTimer) clearInterval(totpTimer);
   if (syncIntervalTimer) clearInterval(syncIntervalTimer);
   if (idleLockCheckTimer) clearInterval(idleLockCheckTimer);
@@ -2620,7 +2717,7 @@ onUnmounted(() => {
           </div>
           <div class="flex items-baseline gap-2">
             <span class="font-bold text-base text-[#202124] tracking-tight">Google 账号管家</span>
-            <span class="text-[11px] font-semibold uppercase px-2 py-0.5 bg-[#e8f0fe] text-[#1a73e8] rounded-full">v3.1.19</span>
+            <span class="text-[11px] font-semibold uppercase px-2 py-0.5 bg-[#e8f0fe] text-[#1a73e8] rounded-full">v3.1.20</span>
           </div>
         </div>
 
@@ -3584,11 +3681,30 @@ onUnmounted(() => {
                 <button
                   @click="openInApp('https://payments.google.com/gp/w/home/settings')"
                   :disabled="isOpeningBrowser"
-                  class="h-7 px-1.5 bg-[#f1f3f4] hover:bg-[#e8eaed] active:bg-[#e2e5e9] text-[#3c4043] rounded-lg text-[11px] font-medium flex items-center justify-center gap-1 transition-all col-span-2 disabled:opacity-50 cursor-pointer"
+                  class="h-7 px-1.5 bg-[#f1f3f4] hover:bg-[#e8eaed] active:bg-[#e2e5e9] text-[#3c4043] rounded-lg text-[11px] font-medium flex items-center justify-center gap-1 transition-all disabled:opacity-50 cursor-pointer"
                   title="在专属独立会话窗口中打开支付与账单"
                 >
                   <CreditCard class="w-3 h-3 text-[#1a73e8]" />
-                  <span>支付设置与账单</span>
+                  <span>支付与账单</span>
+                </button>
+                <button
+                  @click="toggleBrowserTakeover(selectedRecord)"
+                  :class="[
+                    'h-7 px-1.5 rounded-lg text-[11px] font-medium flex items-center justify-center gap-1 transition-all cursor-pointer',
+                    isTakeoverActive && takeoverTargetRecord?.id === selectedRecord.id
+                      ? 'bg-[#1a73e8] hover:bg-[#1557b0] text-white shadow-xs animate-pulse'
+                      : 'bg-[#e8f0fe] hover:bg-[#d2e3fc] active:bg-[#c2dbfe] text-[#1a73e8]'
+                  ]"
+                  title="开启 60 秒临时接管：自动拦截外部软件/CLI 唤起默认浏览器的登录跳转或复制的授权链接，并在此账号独立会话中打开"
+                >
+                  <Zap class="w-3 h-3 flex-shrink-0" />
+                  <span class="truncate">
+                    {{
+                      isTakeoverActive && takeoverTargetRecord?.id === selectedRecord.id
+                        ? `接管中 ${takeoverRemainingSec}s`
+                        : '接管登录'
+                    }}
+                  </span>
                 </button>
                 <button
                   @click="openCustomUrlModal"
@@ -3598,6 +3714,24 @@ onUnmounted(() => {
                   <Compass class="w-3 h-3 text-[#1a73e8]" />
                   <span>更多网址</span>
                 </button>
+                <div
+                  v-if="isTakeoverActive"
+                  class="col-span-3 px-2.5 py-1.5 bg-[#e8f0fe]/90 border border-[#1a73e8]/30 rounded-xl flex items-center justify-between gap-2 text-[11px] text-[#174ea6]"
+                >
+                  <div class="flex items-center gap-1.5 min-w-0">
+                    <span class="w-2 h-2 rounded-full bg-[#1a73e8] animate-ping flex-shrink-0"></span>
+                    <span class="truncate font-medium">
+                      正在接管外部跳转 ({{ takeoverTargetRecord?.email }} · {{ takeoverRemainingSec }}s) — 请在外部点击登录或复制链接
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    @click="stopBrowserTakeover(true)"
+                    class="px-2 py-0.5 bg-white hover:bg-[#f1f3f4] text-[#1a73e8] rounded-md font-semibold flex-shrink-0 cursor-pointer border border-[#1a73e8]/20"
+                  >
+                    停止
+                  </button>
+                </div>
                 <button
                   v-if="selectedRecord.recovery_email"
                   @click="copyText(selectedRecord.recovery_email, 'rec_email')"
@@ -4057,6 +4191,35 @@ onUnmounted(() => {
           </div>
           <button @click="showCustomUrlModal = false" class="p-1.5 hover:bg-[#f1f3f4] rounded-full text-[#5f6368]">
             <X class="w-4 h-4" />
+          </button>
+        </div>
+
+        <!-- Temporary External Browser Takeover Card -->
+        <div class="mb-4 p-3 bg-[#f8fafd] border border-[#d2e3fc] rounded-2xl flex items-center justify-between gap-3">
+          <div class="min-w-0">
+            <div class="text-xs font-bold text-[#202124] flex items-center gap-1.5">
+              <Zap class="w-3.5 h-3.5 text-[#1a73e8] flex-shrink-0" />
+              <span>临时接管外部浏览器跳转 (60s)</span>
+            </div>
+            <p class="text-[11px] text-[#5f6368] mt-0.5 leading-relaxed">
+              开启后在外部软件/CLI 点击登录或复制授权链接，将自动拦截并在当前账号独立会话中打开
+            </p>
+          </div>
+          <button
+            type="button"
+            @click="toggleBrowserTakeover(selectedRecord)"
+            :class="[
+              'px-3 py-2 rounded-xl text-xs font-semibold flex-shrink-0 transition-all cursor-pointer',
+              isTakeoverActive && takeoverTargetRecord?.id === selectedRecord.id
+                ? 'bg-rose-600 hover:bg-rose-700 text-white shadow-xs'
+                : 'bg-[#1a73e8] hover:bg-[#1557b0] text-white shadow-xs'
+            ]"
+          >
+            {{
+              isTakeoverActive && takeoverTargetRecord?.id === selectedRecord.id
+                ? `停止接管 (${takeoverRemainingSec}s)`
+                : '开启接管'
+            }}
           </button>
         </div>
 
@@ -5108,7 +5271,7 @@ onUnmounted(() => {
                     <h3 class="text-xs font-bold text-[#202124] flex items-center gap-2 flex-wrap">
                       <span>软件版本检查更新</span>
                       <span class="px-2 py-0.5 rounded-full bg-[#e8f0fe] text-[#1a73e8] text-[10px] font-mono font-bold whitespace-nowrap">
-                        当前: v3.1.19
+                        当前: v3.1.20
                       </span>
                     </h3>
                     <p class="text-[11px] text-[#5f6368] mt-0.5">
@@ -5334,7 +5497,7 @@ onUnmounted(() => {
               </div>
               <div>
                 <h3 class="text-base font-bold text-[#202124]">Google 账号管家</h3>
-                <p class="text-xs text-[#1a73e8] font-mono font-medium mt-0.5">v3.1.19</p>
+                <p class="text-xs text-[#1a73e8] font-mono font-medium mt-0.5">v3.1.20</p>
               </div>
               <p class="text-xs text-[#5f6368] max-w-md leading-relaxed">
                 面向专业运维与个人多账号管理的高性能轻量跨平台保险库，集成 RFC 6238 2FA 动态码、硬件级免密解锁、多隔离环境浏览器会话与 WebDAV 端到端纯密文同步。
