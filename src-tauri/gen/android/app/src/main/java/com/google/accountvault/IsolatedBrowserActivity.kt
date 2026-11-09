@@ -1036,11 +1036,38 @@ class IsolatedBrowserActivity : Activity() {
             }
         }
 
+        webView.addJavascriptInterface(object {
+            @JavascriptInterface
+            fun copyText(text: String) {
+                mainHandler.post {
+                    copyToClipboard("授权回调内容", text)
+                }
+            }
+        }, "GVaultBridge")
+
         webView.webViewClient = object : WebViewClient() {
+            override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                if (url != null && isLocalhostCallback(url)) {
+                    view?.stopLoading()
+                    renderLocalhostCallbackPage(url)
+                    return
+                }
+                super.onPageStarted(view, url, favicon)
+            }
+
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
                 injectAutofillScript()
                 CookieIsolationHelper.saveCookies(this@IsolatedBrowserActivity, webView, profileKey, url)
+            }
+
+            override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
+                val reqUrl = request?.url?.toString() ?: ""
+                if (request?.isForMainFrame == true && isLocalhostCallback(reqUrl)) {
+                    val htmlBytes = buildLocalhostCallbackHtml(reqUrl).toByteArray(Charsets.UTF_8)
+                    return WebResourceResponse("text/html", "UTF-8", java.io.ByteArrayInputStream(htmlBytes))
+                }
+                return super.shouldInterceptRequest(view, request)
             }
 
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
@@ -1051,6 +1078,19 @@ class IsolatedBrowserActivity : Activity() {
             @Deprecated("Deprecated in Java")
             override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
                 return handleUrl(url ?: "")
+            }
+
+            override fun onReceivedError(
+                view: WebView?,
+                request: WebResourceRequest?,
+                error: WebResourceError?
+            ) {
+                val failingUrl = request?.url?.toString() ?: ""
+                if (request?.isForMainFrame == true && isLocalhostCallback(failingUrl)) {
+                    renderLocalhostCallbackPage(failingUrl)
+                    return
+                }
+                super.onReceivedError(view, request, error)
             }
 
             private fun isLocalhostCallback(rawUrl: String): Boolean {
@@ -1084,8 +1124,7 @@ class IsolatedBrowserActivity : Activity() {
         }
     }
 
-    private fun renderLocalhostCallbackPage(callbackUrl: String) {
-        if (!::webView.isInitialized) return
+    private fun buildLocalhostCallbackHtml(callbackUrl: String): String {
         val u = try { Uri.parse(callbackUrl) } catch (_: Throwable) { null }
         val portStr = if (u != null && u.port != -1) "端口: ${u.port}" else "本地回环"
         var codeParam = try { u?.getQueryParameter("code") ?: "" } catch (_: Throwable) { "" }
@@ -1117,7 +1156,7 @@ class IsolatedBrowserActivity : Activity() {
             """
         } else ""
 
-        val html = """
+        return """
             <!DOCTYPE html>
             <html lang="zh-CN">
             <head>
@@ -1172,6 +1211,10 @@ class IsolatedBrowserActivity : Activity() {
                     const fullUrl = $urlJson;
                     const codeVal = $codeJson;
                     function doCopy(txt) {
+                        if (window.GVaultBridge && window.GVaultBridge.copyText) {
+                            window.GVaultBridge.copyText(txt);
+                            return;
+                        }
                         if (navigator.clipboard && navigator.clipboard.writeText) {
                             navigator.clipboard.writeText(txt);
                         } else {
@@ -1212,7 +1255,11 @@ class IsolatedBrowserActivity : Activity() {
             </body>
             </html>
         """.trimIndent()
+    }
 
+    private fun renderLocalhostCallbackPage(callbackUrl: String) {
+        if (!::webView.isInitialized) return
+        val html = buildLocalhostCallbackHtml(callbackUrl)
         webView.loadDataWithBaseURL("https://localhost/", html, "text/html", "UTF-8", null)
     }
 

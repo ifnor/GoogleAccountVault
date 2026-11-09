@@ -759,157 +759,298 @@ fn is_localhost_callback_url(u: &tauri::Url) -> bool {
     }
 }
 
-fn build_localhost_callback_eval_script(callback_url: &str, email: &str) -> String {
+fn is_localhost_callback_str(raw: &str) -> bool {
+    if let Ok(u) = tauri::Url::parse(raw) {
+        return is_localhost_callback_url(&u);
+    }
+    false
+}
+
+fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+fn build_localhost_callback_html(callback_url: &str, email: &str) -> String {
+    let mut port_str = "本地回环".to_string();
+    let mut code_param = String::new();
+
+    if let Ok(parsed) = tauri::Url::parse(callback_url) {
+        if let Some(p) = parsed.port() {
+            port_str = format!("端口: {p}");
+        }
+        for (k, v) in parsed.query_pairs() {
+            if k == "code" && !v.is_empty() {
+                code_param = v.to_string();
+                break;
+            }
+        }
+        if code_param.is_empty() {
+            if let Some(frag) = parsed.fragment() {
+                if let Ok(frag_url) = tauri::Url::parse(&format!("http://localhost/?{frag}")) {
+                    for (k, v) in frag_url.query_pairs() {
+                        if (k == "code" || k == "access_token") && !v.is_empty() {
+                            code_param = v.to_string();
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let safe_url_html = html_escape(callback_url);
+    let safe_email_html = html_escape(email);
+    let safe_port_html = html_escape(&port_str);
+    let safe_code_html = html_escape(&code_param);
     let url_json = serde_json::to_string(callback_url).unwrap_or_else(|_| "\"\"".to_string());
-    let email_json = serde_json::to_string(email).unwrap_or_else(|_| "\"\"".to_string());
+    let code_json = serde_json::to_string(&code_param).unwrap_or_else(|_| "\"\"".to_string());
+
+    let code_section_html = if !code_param.is_empty() {
+        format!(
+            r###"
+            <div style="margin-top:16px;padding:14px 16px;background:#f8fafd;border-radius:16px;border:1px solid #dadce0;display:flex;align-items:center;justify-content:space-between;gap:12px;">
+                <div style="min-width:0;flex:1;text-align:left;">
+                    <div style="font-size:12px;color:#5f6368;font-weight:500;">已自动提取授权码 (<code style="color:#1a73e8;font-family:Consolas,monospace;">code</code> 参数)</div>
+                    <div id="gvaultCodeVal" style="font-family:Consolas,Monaco,monospace;font-size:12px;font-weight:600;color:#202124;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:4px;user-select:all;">{safe_code_html}</div>
+                </div>
+                <button id="gvaultCopyCodeBtn" type="button" onclick="copyCode()" style="padding:7px 14px;background:#ffffff;color:#1a73e8;border:1px solid #dadce0;border-radius:12px;font-size:12px;font-weight:600;cursor:pointer;flex-shrink:0;transition:all 0.15s;">
+                    仅复制 Code
+                </button>
+            </div>
+            "###
+        )
+    } else {
+        String::new()
+    };
 
     format!(
-        r###"
-        (function() {{
-            const fullUrl = {url_json};
-            const accountEmail = {email_json};
-            let portStr = "";
-            let codeParam = "";
+        r###"<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>已捕获本地回调地址 - Google 账号管家</title>
+</head>
+<body style="min-height:100vh;margin:0;padding:24px;background:#f0f4f9;display:flex;align-items:center;justify-content:center;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Microsoft YaHei',sans-serif;box-sizing:border-box;">
+    <div style="width:100%;max-width:520px;background:#ffffff;color:#202124;border:1px solid #dadce0;border-radius:24px;padding:28px;box-shadow:0 12px 32px rgba(0,0,0,0.08);box-sizing:border-box;">
+        <div style="display:flex;flex-direction:column;align-items:center;text-align:center;margin-bottom:20px;">
+            <div style="position:relative;margin-bottom:12px;">
+                <div style="width:56px;height:56px;border-radius:16px;background:#f8fafd;border:1px solid #dadce0;display:flex;align-items:center;justify-content:center;">
+                    <svg style="width:32px;height:32px;" viewBox="0 0 24 24" fill="none">
+                        <path d="M12 2a10 10 0 0 1 7.07 2.93l-2.83 2.83A6 6 0 0 0 12 6V2z" fill="#EA4335" />
+                        <path d="M19.07 4.93A10 10 0 0 1 22 12h-4a6 6 0 0 0-1.76-4.24l2.83-2.83z" fill="#FBBC05" />
+                        <path d="M22 12a10 10 0 0 1-10 10v-4a6 6 0 0 0 6-6h4z" fill="#34A853" />
+                        <path d="M12 22A10 10 0 0 1 2 12h4a6 6 0 0 0 6 6v4z" fill="#4285F4" />
+                        <path d="M2 12A10 10 0 0 1 12 2v4a6 6 0 0 0-6 6H2z" fill="#4285F4" opacity="0.85" />
+                    </svg>
+                </div>
+                <div style="position:absolute;bottom:-4px;right:-4px;width:20px;height:20px;border-radius:50%;background:#10b981;color:#ffffff;display:flex;align-items:center;justify-content:center;border:2px solid #ffffff;">
+                    <svg style="width:12px;height:12px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                        <polyline points="20 6 9 17 4 12"></polyline>
+                    </svg>
+                </div>
+            </div>
+
+            <div style="display:inline-flex;align-items:center;padding:3px 12px;border-radius:999px;background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;font-size:12px;font-weight:600;margin-bottom:6px;">
+                OAuth 本地回调已自动拦截
+            </div>
+            <h1 style="font-size:17px;font-weight:700;color:#202124;margin:2px 0;">已捕获本地回调地址 (localhost)</h1>
+            <p style="font-size:12px;color:#5f6368;margin:4px 0 0 0;">当前授权账号：<span style="font-weight:600;color:#1a73e8;">{safe_email_html}</span></p>
+        </div>
+
+        <div>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                <label style="font-size:12px;font-weight:600;color:#3c4043;">完整回调地址 (Callback URL)</label>
+                <span style="font-size:12px;color:#80868b;font-family:Consolas,monospace;">{safe_port_html}</span>
+            </div>
+
+            <textarea id="gvaultUrlInput" readonly rows="4" onclick="this.select()" style="width:100%;padding:12px;background:#f8fafd;border-radius:16px;border:1px solid #dadce0;font-family:Consolas,Monaco,monospace;font-size:12px;color:#202124;outline:none;resize:none;line-height:1.55;word-break:break-all;box-sizing:border-box;">{safe_url_html}</textarea>
+
+            <button id="gvaultCopyUrlBtn" type="button" onclick="copyFull()" style="margin-top:10px;width:100%;padding:11px 16px;background:#1a73e8;color:#ffffff;border:none;border-radius:12px;font-size:13px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;box-shadow:0 2px 6px rgba(26,115,232,0.25);transition:all 0.15s;">
+                <svg style="width:16px;height:16px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+                <span id="gvaultCopyBtnText">一键复制完整回调地址</span>
+            </button>
+        </div>
+
+        {code_section_html}
+    </div>
+
+    <script>
+        let fullUrl = {url_json};
+        let codeParam = {code_json};
+
+        (function syncLocationHash() {{
             try {{
-                const parsed = new URL(fullUrl);
-                portStr = parsed.port ? ("端口: " + parsed.port) : "本地回环";
-                codeParam = parsed.searchParams.get("code") || "";
-                if (!codeParam && parsed.hash) {{
-                    const hashParams = new URLSearchParams(parsed.hash.replace(/^#/, ""));
-                    codeParam = hashParams.get("code") || hashParams.get("access_token") || "";
+                if (window.location && /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0)(:\d+)?(\/|$)/i.test(window.location.href)) {{
+                    if (window.location.href.length > fullUrl.length) {{
+                        fullUrl = window.location.href;
+                        const urlInput = document.getElementById("gvaultUrlInput");
+                        if (urlInput) urlInput.value = fullUrl;
+                    }}
                 }}
             }} catch (_) {{}}
+        }})();
 
-            const escapeHtml = (str) => String(str)
-                .replace(/&/g, "&amp;")
-                .replace(/</g, "&lt;")
-                .replace(/>/g, "&gt;")
-                .replace(/"/g, "&quot;");
-
-            const codeSectionHtml = codeParam ? `
-                <div style="margin-top:16px;padding:14px 16px;background:#f8fafd;border-radius:16px;border:1px solid #dadce0;display:flex;align-items:center;justify-content:space-between;gap:12px;">
-                    <div style="min-width:0;flex:1;text-align:left;">
-                        <div style="font-size:12px;color:#5f6368;font-weight:500;">已自动提取授权码 (<code style="color:#1a73e8;font-family:Consolas,monospace;">code</code> 参数)</div>
-                        <div id="gvaultCodeVal" style="font-family:Consolas,Monaco,monospace;font-size:12px;font-weight:600;color:#202124;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:4px;user-select:all;">${{escapeHtml(codeParam)}}</div>
-                    </div>
-                    <button id="gvaultCopyCodeBtn" type="button" style="padding:7px 14px;background:#ffffff;color:#1a73e8;border:1px solid #dadce0;border-radius:12px;font-size:12px;font-weight:600;cursor:pointer;flex-shrink:0;transition:all 0.15s;">
-                        仅复制 Code
-                    </button>
-                </div>
-            ` : "";
-
-            const html = `
-                <div style="min-height:100vh;margin:0;padding:24px;background:#f0f4f9;display:flex;align-items:center;justify-content:center;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Microsoft YaHei',sans-serif;box-sizing:border-box;">
-                    <div style="width:100%;max-width:520px;background:#ffffff;color:#202124;border:1px solid #dadce0;border-radius:24px;padding:28px;box-shadow:0 12px 32px rgba(0,0,0,0.08);box-sizing:border-box;">
-                        <div style="display:flex;flex-direction:column;align-items:center;text-align:center;margin-bottom:20px;">
-                            <div style="position:relative;margin-bottom:12px;">
-                                <div style="width:56px;height:56px;border-radius:16px;background:#f8fafd;border:1px solid #dadce0;display:flex;align-items:center;justify-content:center;">
-                                    <svg style="width:32px;height:32px;" viewBox="0 0 24 24" fill="none">
-                                        <path d="M12 2a10 10 0 0 1 7.07 2.93l-2.83 2.83A6 6 0 0 0 12 6V2z" fill="#EA4335" />
-                                        <path d="M19.07 4.93A10 10 0 0 1 22 12h-4a6 6 0 0 0-1.76-4.24l2.83-2.83z" fill="#FBBC05" />
-                                        <path d="M22 12a10 10 0 0 1-10 10v-4a6 6 0 0 0 6-6h4z" fill="#34A853" />
-                                        <path d="M12 22A10 10 0 0 1 2 12h4a6 6 0 0 0 6 6v4z" fill="#4285F4" />
-                                        <path d="M2 12A10 10 0 0 1 12 2v4a6 6 0 0 0-6 6H2z" fill="#4285F4" opacity="0.85" />
-                                    </svg>
-                                </div>
-                                <div style="position:absolute;bottom:-4px;right:-4px;width:20px;height:20px;border-radius:50%;background:#10b981;color:#ffffff;display:flex;align-items:center;justify-content:center;border:2px solid #ffffff;">
-                                    <svg style="width:12px;height:12px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
-                                        <polyline points="20 6 9 17 4 12"></polyline>
-                                    </svg>
-                                </div>
-                            </div>
-
-                            <div style="display:inline-flex;align-items:center;padding:3px 12px;border-radius:999px;background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;font-size:12px;font-weight:600;margin-bottom:6px;">
-                                OAuth 本地回调已自动拦截
-                            </div>
-                            <h1 style="font-size:17px;font-weight:700;color:#202124;margin:2px 0;">已捕获本地回调地址 (localhost)</h1>
-                            <p style="font-size:12px;color:#5f6368;margin:4px 0 0 0;">当前授权账号：<span style="font-weight:600;color:#1a73e8;">${{escapeHtml(accountEmail)}}</span></p>
-                        </div>
-
-                        <div>
-                            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
-                                <label style="font-size:12px;font-weight:600;color:#3c4043;">完整回调地址 (Callback URL)</label>
-                                <span style="font-size:12px;color:#80868b;font-family:Consolas,monospace;">${{escapeHtml(portStr)}}</span>
-                            </div>
-
-                            <textarea id="gvaultUrlInput" readonly rows="4" style="width:100%;padding:12px;background:#f8fafd;border-radius:16px;border:1px solid #dadce0;font-family:Consolas,Monaco,monospace;font-size:12px;color:#202124;outline:none;resize:none;line-height:1.55;word-break:break-all;box-sizing:border-box;">${{escapeHtml(fullUrl)}}</textarea>
-
-                            <button id="gvaultCopyUrlBtn" type="button" style="margin-top:10px;width:100%;padding:11px 16px;background:#1a73e8;color:#ffffff;border:none;border-radius:12px;font-size:13px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;box-shadow:0 2px 6px rgba(26,115,232,0.25);transition:all 0.15s;">
-                                <svg style="width:16px;height:16px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
-                                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
-                                </svg>
-                                <span id="gvaultCopyBtnText">一键复制完整回调地址</span>
-                            </button>
-                        </div>
-
-                        ${{codeSectionHtml}}
-                    </div>
-                </div>
-            `;
-
-            document.open();
-            document.write("<!DOCTYPE html><html><head><meta charset='utf-8'><title>已捕获本地回调地址 - Google 账号管家</title></head><body style='margin:0;padding:0;'>" + html + "</body></html>");
-            document.close();
-
-            function copyTextFallback(text) {{
-                if (navigator.clipboard && navigator.clipboard.writeText) {{
-                    navigator.clipboard.writeText(text).catch(() => fallbackExecCopy(text));
-                }} else {{
-                    fallbackExecCopy(text);
-                }}
+        function copyTextFallback(text) {{
+            if (navigator.clipboard && navigator.clipboard.writeText) {{
+                navigator.clipboard.writeText(text).catch(() => fallbackExecCopy(text));
+            }} else {{
+                fallbackExecCopy(text);
             }}
+        }}
 
-            function fallbackExecCopy(text) {{
-                const ta = document.createElement("textarea");
-                ta.value = text;
-                ta.style.position = "fixed";
-                ta.style.opacity = "0";
-                document.body.appendChild(ta);
-                ta.focus();
-                ta.select();
-                try {{ document.execCommand("copy"); }} catch (_) {{}}
-                document.body.removeChild(ta);
-            }}
+        function fallbackExecCopy(text) {{
+            const ta = document.createElement("textarea");
+            ta.value = text;
+            ta.style.position = "fixed";
+            ta.style.opacity = "0";
+            document.body.appendChild(ta);
+            ta.focus();
+            ta.select();
+            try {{ document.execCommand("copy"); }} catch (_) {{}}
+            document.body.removeChild(ta);
+        }}
 
+        function copyFull() {{
             const urlInput = document.getElementById("gvaultUrlInput");
             const copyUrlBtn = document.getElementById("gvaultCopyUrlBtn");
             const copyBtnText = document.getElementById("gvaultCopyBtnText");
-            if (urlInput) {{
-                urlInput.addEventListener("click", () => urlInput.select());
-            }}
-            if (copyUrlBtn) {{
-                copyUrlBtn.addEventListener("click", () => {{
-                    if (urlInput) urlInput.select();
-                    copyTextFallback(fullUrl);
-                    copyUrlBtn.style.background = "#059669";
-                    if (copyBtnText) copyBtnText.innerText = "✓ 已成功复制完整回调地址！";
-                    setTimeout(() => {{
-                        copyUrlBtn.style.background = "#1a73e8";
-                        if (copyBtnText) copyBtnText.innerText = "一键复制完整回调地址";
-                    }}, 2000);
-                }});
-            }}
+            if (urlInput) urlInput.select();
+            copyTextFallback(fullUrl);
+            if (copyUrlBtn) copyUrlBtn.style.background = "#059669";
+            if (copyBtnText) copyBtnText.innerText = "✓ 已成功复制完整回调地址！";
+            setTimeout(() => {{
+                if (copyUrlBtn) copyUrlBtn.style.background = "#1a73e8";
+                if (copyBtnText) copyBtnText.innerText = "一键复制完整回调地址";
+            }}, 2000);
+        }}
 
+        function copyCode() {{
             const copyCodeBtn = document.getElementById("gvaultCopyCodeBtn");
-            if (copyCodeBtn && codeParam) {{
-                copyCodeBtn.addEventListener("click", () => {{
-                    copyTextFallback(codeParam);
-                    copyCodeBtn.innerText = "✓ 已复制";
-                    copyCodeBtn.style.background = "#ecfdf5";
-                    copyCodeBtn.style.color = "#047857";
-                    copyCodeBtn.style.borderColor = "#6ee7b7";
-                    setTimeout(() => {{
-                        copyCodeBtn.innerText = "仅复制 Code";
-                        copyCodeBtn.style.background = "#ffffff";
-                        copyCodeBtn.style.color = "#1a73e8";
-                        copyCodeBtn.style.borderColor = "#dadce0";
-                    }}, 2000);
-                }});
+            copyTextFallback(codeParam);
+            if (copyCodeBtn) {{
+                copyCodeBtn.innerText = "✓ 已复制";
+                copyCodeBtn.style.background = "#ecfdf5";
+                copyCodeBtn.style.color = "#047857";
+                copyCodeBtn.style.borderColor = "#6ee7b7";
+                setTimeout(() => {{
+                    copyCodeBtn.innerText = "仅复制 Code";
+                    copyCodeBtn.style.background = "#ffffff";
+                    copyCodeBtn.style.color = "#1a73e8";
+                    copyCodeBtn.style.borderColor = "#dadce0";
+                }}, 2000);
             }}
-        }})();
-        "###
+        }}
+    </script>
+</body>
+</html>"###
     )
+}
+
+#[cfg(target_os = "windows")]
+fn attach_webview2_localhost_interceptor(
+    window: &tauri::WebviewWindow,
+    email: String,
+    initial_localhost_url: Option<String>,
+) {
+    let _ = window.with_webview(move |webview| {
+        unsafe {
+            use webview2_com::Microsoft::Web::WebView2::Win32::{
+                COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT, ICoreWebView2, ICoreWebView2_2,
+                ICoreWebView2WebResourceRequestedEventArgs,
+            };
+            use webview2_com::WebResourceRequestedEventHandler;
+            use windows::Win32::Foundation::E_FAIL;
+            use windows::Win32::UI::Shell::SHCreateMemStream;
+            use windows::core::{Interface, PCWSTR, PWSTR};
+
+            let Ok(core_wv2) = webview.controller().CoreWebView2() else {
+                return;
+            };
+
+            for pattern in [
+                "*",
+                "http://localhost/*",
+                "http://localhost:*/*",
+                "https://localhost/*",
+                "https://localhost:*/*",
+                "http://127.0.0.1/*",
+                "http://127.0.0.1:*/*",
+                "https://127.0.0.1/*",
+                "https://127.0.0.1:*/*",
+            ] {
+                let wide: Vec<u16> = pattern.encode_utf16().chain(std::iter::once(0)).collect();
+                let _ = core_wv2.AddWebResourceRequestedFilter(
+                    PCWSTR(wide.as_ptr()),
+                    COREWEBVIEW2_WEB_RESOURCE_CONTEXT_DOCUMENT,
+                );
+            }
+
+            let env_res = core_wv2
+                .cast::<ICoreWebView2_2>()
+                .and_then(|wv2_2| wv2_2.Environment());
+
+            let email_for_handler = email.clone();
+            let handler = WebResourceRequestedEventHandler::create(Box::new(
+                move |wv: Option<ICoreWebView2>,
+                      args: Option<ICoreWebView2WebResourceRequestedEventArgs>| {
+                    let Some(args) = args else { return Ok(()) };
+                    let Ok(req) = args.Request() else { return Ok(()) };
+                    let mut uri_pwstr = PWSTR::null();
+                    if req.Uri(&mut uri_pwstr).is_err() || uri_pwstr.is_null() {
+                        return Ok(());
+                    }
+                    let uri_str = uri_pwstr.to_string().unwrap_or_default();
+                    windows::Win32::System::Com::CoTaskMemFree(Some(uri_pwstr.0 as *const _));
+
+                    if is_localhost_callback_str(&uri_str) {
+                        let html = build_localhost_callback_html(&uri_str, &email_for_handler);
+                        if let Ok(ref env) = env_res {
+                            let bytes = html.as_bytes();
+                            if let Some(stream) = SHCreateMemStream(Some(bytes)) {
+                                let status_wide: Vec<u16> = "OK".encode_utf16().chain(std::iter::once(0)).collect();
+                                let headers_wide: Vec<u16> = "Content-Type: text/html; charset=utf-8\r\nCache-Control: no-store"
+                                    .encode_utf16()
+                                    .chain(std::iter::once(0))
+                                    .collect();
+                                if let Ok(resp) = env.CreateWebResourceResponse(
+                                    &stream,
+                                    200,
+                                    PCWSTR(status_wide.as_ptr()),
+                                    PCWSTR(headers_wide.as_ptr()),
+                                ) {
+                                    let _ = args.SetResponse(&resp);
+                                    return Ok(());
+                                }
+                            }
+                        }
+                        if let Some(wv) = wv {
+                            let html_wide: Vec<u16> = html.encode_utf16().chain(std::iter::once(0)).collect();
+                            let _ = wv.NavigateToString(PCWSTR(html_wide.as_ptr()));
+                            return Err(windows::core::Error::from_hresult(E_FAIL));
+                        }
+                    }
+                    Ok(())
+                },
+            ));
+
+            let mut token = 0i64;
+            let _ = core_wv2.add_WebResourceRequested(&handler, &mut token);
+
+            if let Some(init_url) = initial_localhost_url {
+                let html = build_localhost_callback_html(&init_url, &email);
+                let html_wide: Vec<u16> = html.encode_utf16().chain(std::iter::once(0)).collect();
+                let _ = core_wv2.NavigateToString(PCWSTR(html_wide.as_ptr()));
+            }
+        }
+    });
 }
 
 #[tauri::command]
@@ -1123,13 +1264,8 @@ async fn open_in_app_browser(
         if let Some(w) = app.get_webview_window(&safe_label) {
             let _ = w.show();
             let _ = w.set_focus();
-            if is_localhost_callback_url(&parsed_url) {
-                let script = build_localhost_callback_eval_script(parsed_url.as_str(), &email);
-                let _ = w.eval(&script);
-            } else {
-                let _ = w.navigate(parsed_url);
-                let _ = w.eval(&autofill_script);
-            }
+            let _ = w.navigate(parsed_url);
+            let _ = w.eval(&autofill_script);
             return Ok(());
         }
 
@@ -1144,9 +1280,11 @@ async fn open_in_app_browser(
             format!("Google 独立会话 - {}", email)
         };
 
-        let nav_app = app.clone();
-        let nav_label = safe_label.clone();
-        let nav_email = email.clone();
+        let initial_localhost_url = if is_localhost_callback_url(&parsed_url) {
+            Some(parsed_url.as_str().to_string())
+        } else {
+            None
+        };
 
         let mut builder = tauri::WebviewWindowBuilder::new(
             app,
@@ -1159,23 +1297,7 @@ async fn open_in_app_browser(
         .user_agent(ua)
         .devtools(true)
         .initialization_script(&autofill_script)
-        .data_directory(session_dir)
-        .on_navigation(move |target_url| {
-            if is_localhost_callback_url(target_url) {
-                let captured = target_url.as_str().to_string();
-                let script = build_localhost_callback_eval_script(&captured, &nav_email);
-                let app_handle = nav_app.clone();
-                let label_clone = nav_label.clone();
-                std::thread::spawn(move || {
-                    use tauri::Manager;
-                    if let Some(win) = app_handle.get_webview_window(&label_clone) {
-                        let _ = win.eval(&script);
-                    }
-                });
-                return false;
-            }
-            true
-        });
+        .data_directory(session_dir);
 
         if !clean_proxy.is_empty() {
             let normalized_proxy = if clean_proxy.contains("://") {
@@ -1195,6 +1317,8 @@ async fn open_in_app_browser(
         let _window = builder
             .build()
             .map_err(|e| format!("创建独立窗口失败: {e}"))?;
+        #[cfg(target_os = "windows")]
+        attach_webview2_localhost_interceptor(&_window, email.clone(), initial_localhost_url);
         #[cfg(debug_assertions)]
         let _ = _window.open_devtools();
         Ok(())
@@ -1299,7 +1423,7 @@ async fn check_github_update(
     });
 
     let client = reqwest::Client::builder()
-        .user_agent("google-account-vault/3.1.18")
+        .user_agent("google-account-vault/3.1.19")
         .timeout(std::time::Duration::from_secs(8))
         .build()
         .map_err(|e| format!("构建 HTTP 客户端失败: {e}"))?;
@@ -1318,8 +1442,8 @@ async fn check_github_update(
 
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(UpdateInfo {
-            current_version: "3.1.18".to_string(),
-            latest_version: "3.1.18".to_string(),
+            current_version: "3.1.19".to_string(),
+            latest_version: "3.1.19".to_string(),
             has_update: false,
             release_name: "暂无发布版本".to_string(),
             release_notes: format!("仓库 {} 尚未发布任何公开 Release", target_repo),
@@ -1345,7 +1469,7 @@ async fn check_github_update(
     let json: serde_json::Value =
         serde_json::from_str(&body).map_err(|e| format!("解析 Release JSON 失败: {e}"))?;
 
-    let tag = json["tag_name"].as_str().unwrap_or("3.1.18").to_string();
+    let tag = json["tag_name"].as_str().unwrap_or("3.1.19").to_string();
     let name = json["name"].as_str().unwrap_or(&tag).to_string();
     let notes = json["body"].as_str().unwrap_or("").to_string();
     let published_at = json["published_at"].as_str().unwrap_or("").to_string();
@@ -1410,12 +1534,12 @@ async fn check_github_update(
         _ => setup_url.clone().or_else(|| portable_url.clone()),
     };
 
-    let current = (3, 1, 18);
+    let current = (3, 1, 19);
     let latest = parse_semver(&tag);
     let has_update = latest > current;
 
     Ok(UpdateInfo {
-        current_version: "3.1.18".to_string(),
+        current_version: "3.1.19".to_string(),
         latest_version: tag,
         has_update,
         release_name: name,
@@ -1493,7 +1617,7 @@ async fn start_auto_update(app: tauri::AppHandle, url: String) -> Result<(), Str
     use tauri::Emitter;
 
     let client = reqwest::Client::builder()
-        .user_agent("google-account-vault/3.1.18")
+        .user_agent("google-account-vault/3.1.19")
         .build()
         .map_err(|e| format!("初始化下载客户端失败: {e}"))?;
 
