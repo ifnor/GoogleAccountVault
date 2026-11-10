@@ -1325,7 +1325,28 @@ async fn open_in_app_browser(
     let email_uuid = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_DNS, clean_email.as_bytes());
     let safe_label = format!("browser-{}", &email_uuid.to_string()[..8]);
 
-    let parsed_url = tauri::Url::parse(&url).map_err(|e| format!("无效网址: {e}"))?;
+    let mut parsed_url = tauri::Url::parse(&url).map_err(|e| format!("无效网址: {e}"))?;
+    if !clean_email.is_empty()
+        && parsed_url
+            .host_str()
+            .map(|h| h.eq_ignore_ascii_case("accounts.google.com"))
+            .unwrap_or(false)
+    {
+        let path = parsed_url.path();
+        let is_oauth_or_login = path.contains("/oauth")
+            || path.contains("/signin")
+            || path.contains("/ServiceLogin")
+            || path.contains("/AccountChooser")
+            || path.contains("/v3/signin");
+        let has_login_hint = parsed_url
+            .query_pairs()
+            .any(|(k, _)| k.eq_ignore_ascii_case("login_hint"));
+        if is_oauth_or_login && !has_login_hint {
+            parsed_url
+                .query_pairs_mut()
+                .append_pair("login_hint", email.trim());
+        }
+    }
 
     let safe_email_json = serde_json::to_string(&email).unwrap_or_else(|_| "\"\"".to_string());
     let safe_pwd_json = serde_json::to_string(&password.as_deref().unwrap_or_default())
@@ -1932,7 +1953,7 @@ async fn open_in_app_browser(
 
         let context_obj = unsafe { jni::objects::JObject::from_raw(context_ptr.cast()) };
         let email_j = env.new_string(&email).map_err(|e| e.to_string())?;
-        let url_j = env.new_string(&url).map_err(|e| e.to_string())?;
+        let url_j = env.new_string(parsed_url.as_str()).map_err(|e| e.to_string())?;
         let pwd_j = env
             .new_string(password.unwrap_or_default())
             .map_err(|e| e.to_string())?;
