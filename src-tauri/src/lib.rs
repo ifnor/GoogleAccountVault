@@ -2181,14 +2181,26 @@ fn detect_install_type() -> &'static str {
     }
 }
 
+const CURRENT_APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 fn parse_semver(v: &str) -> (u32, u32, u32) {
-    let clean = v.trim().trim_start_matches(|c| c == 'v' || c == 'V');
+    let trimmed = v.trim();
+    let clean = trimmed
+        .find(|c: char| c.is_ascii_digit())
+        .map(|idx| &trimmed[idx..])
+        .unwrap_or(trimmed);
     let parts: Vec<&str> = clean.split('.').collect();
     let major = parts.first().and_then(|s| s.parse().ok()).unwrap_or(0);
     let minor = parts.get(1).and_then(|s| s.parse().ok()).unwrap_or(0);
     let patch = parts
         .get(2)
-        .and_then(|s| s.split('-').next().unwrap_or("0").parse().ok())
+        .and_then(|s| {
+            s.chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect::<String>()
+                .parse()
+                .ok()
+        })
         .unwrap_or(0);
     (major, minor, patch)
 }
@@ -2226,7 +2238,7 @@ async fn check_github_update(
     });
 
     let client = reqwest::Client::builder()
-        .user_agent("google-account-vault/3.1.20")
+        .user_agent(concat!("google-account-vault/", env!("CARGO_PKG_VERSION")))
         .timeout(std::time::Duration::from_secs(8))
         .build()
         .map_err(|e| format!("构建 HTTP 客户端失败: {e}"))?;
@@ -2245,8 +2257,8 @@ async fn check_github_update(
 
     if resp.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(UpdateInfo {
-            current_version: "3.1.20".to_string(),
-            latest_version: "3.1.20".to_string(),
+            current_version: CURRENT_APP_VERSION.to_string(),
+            latest_version: CURRENT_APP_VERSION.to_string(),
             has_update: false,
             release_name: "暂无发布版本".to_string(),
             release_notes: format!("仓库 {} 尚未发布任何公开 Release", target_repo),
@@ -2272,7 +2284,10 @@ async fn check_github_update(
     let json: serde_json::Value =
         serde_json::from_str(&body).map_err(|e| format!("解析 Release JSON 失败: {e}"))?;
 
-    let tag = json["tag_name"].as_str().unwrap_or("3.1.20").to_string();
+    let tag = json["tag_name"]
+        .as_str()
+        .unwrap_or(CURRENT_APP_VERSION)
+        .to_string();
     let name = json["name"].as_str().unwrap_or(&tag).to_string();
     let notes = json["body"].as_str().unwrap_or("").to_string();
     let published_at = json["published_at"].as_str().unwrap_or("").to_string();
@@ -2337,12 +2352,12 @@ async fn check_github_update(
         _ => setup_url.clone().or_else(|| portable_url.clone()),
     };
 
-    let current = (3, 1, 19);
+    let current = parse_semver(CURRENT_APP_VERSION);
     let latest = parse_semver(&tag);
     let has_update = latest > current;
 
     Ok(UpdateInfo {
-        current_version: "3.1.20".to_string(),
+        current_version: CURRENT_APP_VERSION.to_string(),
         latest_version: tag,
         has_update,
         release_name: name,
@@ -2420,7 +2435,7 @@ async fn start_auto_update(app: tauri::AppHandle, url: String) -> Result<(), Str
     use tauri::Emitter;
 
     let client = reqwest::Client::builder()
-        .user_agent("google-account-vault/3.1.20")
+        .user_agent(concat!("google-account-vault/", env!("CARGO_PKG_VERSION")))
         .build()
         .map_err(|e| format!("初始化下载客户端失败: {e}"))?;
 

@@ -1922,6 +1922,23 @@ const customRepo = ref("ifnor/GoogleAccountVault");
 const updateMirror = ref<UpdateMirror>(
   (localStorage.getItem("gvault_update_mirror") as UpdateMirror) || "gh-proxy"
 );
+const autoCheckUpdateOnStartup = ref<boolean>(
+  localStorage.getItem("gvault_auto_check_update") !== "false"
+);
+
+function toggleAutoCheckUpdate() {
+  autoCheckUpdateOnStartup.value = !autoCheckUpdateOnStartup.value;
+  try {
+    localStorage.setItem("gvault_auto_check_update", String(autoCheckUpdateOnStartup.value));
+  } catch (e) {}
+  notify(
+    autoCheckUpdateOnStartup.value
+      ? "已开启：启动应用时自动静默检查新版本"
+      : "已关闭启动自动检查更新",
+    "info",
+    2000
+  );
+}
 
 function setUpdateMirror(mirror: UpdateMirror) {
   updateMirror.value = mirror;
@@ -2074,10 +2091,13 @@ async function openSettingsModal(tab: "security" | "webdav" | "backups" | "updat
   }
 }
 
-async function checkForUpdates() {
+async function checkForUpdates(silent = false) {
+  if (isCheckingUpdate.value) return;
   isCheckingUpdate.value = true;
-  updateError.value = "";
-  updateResult.value = null;
+  if (!silent) {
+    updateError.value = "";
+    updateResult.value = null;
+  }
   try {
     const mirrorParam =
       updateMirror.value === "gh-proxy"
@@ -2092,13 +2112,15 @@ async function checkForUpdates() {
     });
     updateResult.value = res;
     if (res.has_update) {
-      notify(`✨ 发现新版本 ${res.latest_version}！可在设置中查看更新`, "info", 5000);
-    } else {
+      notify(`✨ 发现新版本 ${res.latest_version}！可在「设置 -> 检查更新」中一键升级`, "info", 5500);
+    } else if (!silent) {
       notify(`当前已是最新版本 (${res.current_version})`, "success", 3000);
     }
   } catch (err: any) {
-    updateError.value = typeof err === "string" ? err : (err?.message || "检查更新失败");
-    notify("检查更新失败: " + updateError.value, "error");
+    if (!silent) {
+      updateError.value = typeof err === "string" ? err : (err?.message || "检查更新失败");
+      notify("检查更新失败: " + updateError.value, "error");
+    }
   } finally {
     isCheckingUpdate.value = false;
   }
@@ -2565,6 +2587,11 @@ onMounted(async () => {
   await refreshSecurityStatus();
   await setupBackNavigation();
   await loadWebDavConfig();
+  if (autoCheckUpdateOnStartup.value) {
+    setTimeout(() => {
+      checkForUpdates(true);
+    }, 1200);
+  }
   if (typeof window !== "undefined") {
     window.addEventListener("resize", updateWindowWidth);
     window.addEventListener("focus", handleWindowFocus);
@@ -2718,6 +2745,15 @@ onUnmounted(() => {
           <div class="flex items-baseline gap-2">
             <span class="font-bold text-base text-[#202124] tracking-tight">Google 账号管家</span>
             <span class="text-[11px] font-semibold uppercase px-2 py-0.5 bg-[#e8f0fe] text-[#1a73e8] rounded-full">v3.1.20</span>
+            <button
+              v-if="updateResult?.has_update"
+              @click="openSettingsModal('updates')"
+              class="text-[11px] font-semibold px-2 py-0.5 bg-emerald-100 hover:bg-emerald-200 text-emerald-800 rounded-full flex items-center gap-1 transition-colors cursor-pointer"
+              title="点击前往检查更新并一键升级"
+            >
+              <Sparkles class="w-3 h-3 text-emerald-600" />
+              <span>新版本 {{ updateResult.latest_version }}</span>
+            </button>
           </div>
         </div>
 
@@ -5281,12 +5317,41 @@ onUnmounted(() => {
                 </div>
 
                 <button
-                  @click="checkForUpdates"
+                  @click="checkForUpdates(false)"
                   :disabled="isCheckingUpdate || isDownloadingUpdate"
                   class="w-full sm:w-auto px-4 py-2 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium flex items-center justify-center gap-1.5 shadow-sm transition-all disabled:opacity-50 cursor-pointer whitespace-nowrap flex-shrink-0"
                 >
                   <RefreshCw :class="['w-3.5 h-3.5', isCheckingUpdate ? 'animate-spin' : '']" />
                   <span>{{ isCheckingUpdate ? "正在检查..." : "立即检查更新" }}</span>
+                </button>
+              </div>
+
+              <!-- Auto Check Update on Startup Toggle -->
+              <div class="pt-2.5 border-t border-[#dadce0]/60 flex items-center justify-between gap-3">
+                <div class="space-y-0.5 min-w-0">
+                  <div class="flex items-center gap-1.5">
+                    <span class="text-xs font-bold text-[#202124]">启动时自动检查更新</span>
+                    <span class="px-1.5 py-0.2 rounded-md bg-[#e8f0fe] text-[#1a73e8] text-[10px] font-semibold">推荐</span>
+                  </div>
+                  <p class="text-[11px] text-[#5f6368]">
+                    每次启动应用后在后台静默检测新版本，发现更新时自动提醒（已是最新版则静默不打扰）
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  @click="toggleAutoCheckUpdate"
+                  :class="[
+                    'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none',
+                    autoCheckUpdateOnStartup ? 'bg-[#1a73e8]' : 'bg-[#dadce0]'
+                  ]"
+                >
+                  <span
+                    :class="[
+                      'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                      autoCheckUpdateOnStartup ? 'translate-x-5' : 'translate-x-0'
+                    ]"
+                  />
                 </button>
               </div>
 
