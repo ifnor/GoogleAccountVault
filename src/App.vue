@@ -52,7 +52,7 @@ import {
 import jsQR from "jsqr";
 import pkg from "../package.json";
 
-const appVersion = ref(pkg.version || "3.1.20");
+const appVersion = ref(pkg.version || "3.1.21");
 
 interface AccountRecord {
   id: string;
@@ -3430,7 +3430,7 @@ onUnmounted(() => {
               @click="isBatchSelectMode ? toggleSelectBatchItem(r.id) : selectAccount(r.id)"
               @dblclick="openEditModal(r)"
               :class="[
-                'px-4 py-3 flex items-center justify-between cursor-pointer transition-colors',
+                'px-3 py-2.5 md:px-4 md:py-3 flex items-center justify-between gap-2 cursor-pointer transition-colors',
                 isBatchSelectMode && selectedBatchIds.includes(r.id)
                   ? 'bg-[#e8f0fe]/70'
                   : selectedId === r.id
@@ -3441,7 +3441,7 @@ onUnmounted(() => {
               ]"
             >
               <!-- Left: Checkbox / Star + Avatar + Email + Group -->
-              <div class="flex items-center gap-2.5 min-w-0">
+              <div class="flex items-center gap-2 md:gap-2.5 min-w-0 flex-1">
                 <!-- Batch Checkbox -->
                 <button
                   v-if="isBatchSelectMode"
@@ -3457,7 +3457,7 @@ onUnmounted(() => {
                 <button
                   type="button"
                   @click.stop="togglePinRecord(r)"
-                  class="p-1 rounded-full hover:bg-black/5 transition-colors flex-shrink-0 cursor-pointer"
+                  class="p-0.5 md:p-1 rounded-full hover:bg-black/5 transition-colors flex-shrink-0 cursor-pointer"
                   :title="r.is_pinned ? '取消星标置顶' : '设为星标置顶 (固定在列表顶部)'"
                 >
                   <Star
@@ -3466,31 +3466,58 @@ onUnmounted(() => {
                   />
                 </button>
 
-                <div class="w-9 h-9 rounded-full bg-[#e8f0fe] text-[#1a73e8] font-bold text-sm flex items-center justify-center flex-shrink-0 relative">
+                <div class="w-8 h-8 md:w-9 md:h-9 rounded-full bg-[#e8f0fe] text-[#1a73e8] font-bold text-xs md:text-sm flex items-center justify-center flex-shrink-0 relative">
                   {{ (r.email[0] || 'G').toUpperCase() }}
                 </div>
-                <div class="min-w-0">
-                  <div class="text-xs font-semibold text-[#202124] truncate flex items-center gap-1.5 flex-wrap">
+                <div class="min-w-0 flex-1">
+                  <!-- Row 1: Email (full width on mobile, with inline status badges on desktop) -->
+                  <div class="text-xs font-semibold text-[#202124] flex items-center gap-1.5 min-w-0">
                     <span class="truncate">{{ r.email }}</span>
-                    <span :class="getStatusBadgeClass(r.status)" title="账号状态">{{ r.status || '待录入' }}</span>
-                    <span :class="getAntigravityBadgeClass(r.antigravity_status)" title="Antigravity (反重力) 状态">
+                    <span :class="[getStatusBadgeClass(r.status), 'hidden md:inline-flex flex-shrink-0']" title="账号状态">{{ r.status || '待录入' }}</span>
+                    <span :class="[getAntigravityBadgeClass(r.antigravity_status), 'hidden md:inline-flex flex-shrink-0']" title="Antigravity (反重力) 状态">
                       AG: {{ r.antigravity_status || '待验证' }}
+                    </span>
+                    <span v-if="r.expire_at && getExpireBadge(r.expire_at)" :class="[getExpireBadge(r.expire_at)?.class, 'hidden md:inline-flex flex-shrink-0']">
+                      {{ getExpireBadge(r.expire_at)?.label }}
+                    </span>
+                  </div>
+
+                  <!-- Row 2 (Mobile Only): All status & plan badges in one horizontal row -->
+                  <div class="flex md:hidden items-center gap-1 mt-1 flex-wrap">
+                    <span :class="getStatusBadgeClass(r.status)">{{ r.status || '待录入' }}</span>
+                    <span :class="getAntigravityBadgeClass(r.antigravity_status)">
+                      AG: {{ r.antigravity_status || '待验证' }}
+                    </span>
+                    <span v-if="r.google_one_plan" class="px-1.5 py-0.2 bg-[#e8f0fe] text-[#1a73e8] rounded text-[10px] font-mono">{{ r.google_one_plan }}</span>
+                    <span
+                      v-if="r.google_one_status === 'active'"
+                      class="px-1.5 py-0.2 rounded-full text-[10px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200"
+                    >
+                      One 有效
+                    </span>
+                    <span
+                      v-else-if="r.google_one_status === 'expired'"
+                      class="px-1.5 py-0.2 rounded-full text-[10px] font-medium bg-rose-50 text-rose-700 border border-rose-200"
+                    >
+                      已失效
                     </span>
                     <span v-if="r.expire_at && getExpireBadge(r.expire_at)" :class="getExpireBadge(r.expire_at)?.class">
                       {{ getExpireBadge(r.expire_at)?.label }}
                     </span>
                   </div>
-                  <div class="text-[11px] text-[#5f6368] flex items-center gap-2 mt-0.5 flex-wrap">
-                    <span v-if="r.group" class="px-1.5 py-0.2 bg-[#f1f3f4] text-[#444746] rounded text-[10px]">{{ r.group }}</span>
-                    <span v-if="r.google_one_plan" class="px-1.5 py-0.2 bg-[#e8f0fe] text-[#1a73e8] rounded text-[10px] font-mono">{{ r.google_one_plan }}</span>
-                    <span v-if="r.proxy" class="px-1.5 py-0.2 bg-purple-50 text-purple-700 border border-purple-200 rounded text-[10px] font-mono" :title="`独立代理: ${r.proxy}`">独立IP</span>
-                    <span v-if="r.recovery_email" class="truncate">{{ r.recovery_email }}</span>
+
+                  <!-- Row 3 on Mobile / Row 2 on Desktop: Secondary metadata & recovery email -->
+                  <div class="text-[11px] text-[#5f6368] flex items-center gap-1.5 md:gap-2 mt-1 md:mt-0.5 min-w-0">
+                    <span v-if="r.group" class="px-1.5 py-0.2 bg-[#f1f3f4] text-[#444746] rounded text-[10px] flex-shrink-0">{{ r.group }}</span>
+                    <span v-if="r.google_one_plan" class="hidden md:inline-block px-1.5 py-0.2 bg-[#e8f0fe] text-[#1a73e8] rounded text-[10px] font-mono flex-shrink-0">{{ r.google_one_plan }}</span>
+                    <span v-if="r.proxy" class="px-1.5 py-0.2 bg-purple-50 text-purple-700 border border-purple-200 rounded text-[10px] font-mono flex-shrink-0" :title="`独立代理: ${r.proxy}`">独立IP</span>
+                    <span v-if="r.recovery_email" class="truncate min-w-0">{{ r.recovery_email }}</span>
                   </div>
                 </div>
               </div>
 
-              <!-- Right: TOTP & One Badge -->
-              <div class="flex items-center gap-2 md:gap-4 flex-shrink-0">
+              <!-- Right: TOTP & Desktop Fixed-Width One Badge -->
+              <div class="flex items-center gap-2 md:gap-3.5 flex-shrink-0">
                 <!-- 2FA Code Badge -->
                 <div v-if="r.totp" class="flex flex-col items-end">
                   <div class="flex items-center gap-1.5 font-mono text-sm font-bold text-[#1a73e8]">
@@ -3508,28 +3535,28 @@ onUnmounted(() => {
                 </div>
                 <div v-else class="text-[11px] text-[#9aa0a6] font-mono hidden sm:block">未配 2FA</div>
 
-                <!-- Google One Badge -->
+                <!-- Google One Badge (Desktop Only, Fixed Width for Vertical Column Alignment) -->
                 <div
                   v-if="r.google_one_status === 'active'"
-                  class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200"
+                  class="hidden md:inline-flex w-16 justify-center text-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 flex-shrink-0"
                 >
                   One 有效
                 </div>
                 <div
                   v-else-if="r.google_one_status === 'expired'"
-                  class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-rose-50 text-rose-700 border border-rose-200"
+                  class="hidden md:inline-flex w-16 justify-center text-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-rose-50 text-rose-700 border border-rose-200 flex-shrink-0"
                 >
                   已失效
                 </div>
                 <div
                   v-else-if="r.google_one_status === 'inactive'"
-                  class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-600 hidden sm:block"
+                  class="hidden md:inline-flex w-16 justify-center text-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-gray-100 text-gray-600 flex-shrink-0"
                 >
                   非会员
                 </div>
                 <div
                   v-else
-                  class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-[#f1f3f4] text-[#5f6368] hidden sm:block"
+                  class="hidden md:inline-flex w-16 justify-center text-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-[#f1f3f4] text-[#5f6368] flex-shrink-0"
                 >
                   未验证
                 </div>
