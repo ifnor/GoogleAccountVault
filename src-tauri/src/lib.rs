@@ -1538,13 +1538,361 @@ async fn open_in_app_browser(
                 }}
             }}
 
-            window.addEventListener("DOMContentLoaded", autoFill);
-            window.addEventListener("load", autoFill);
-            const observer = new MutationObserver(autoFill);
+            let lastActiveInput = null;
+            document.addEventListener("focusin", (e) => {{
+                const el = e.target;
+                if (el && el.tagName === "INPUT" && el.type !== "hidden" && el.type !== "checkbox" && el.type !== "radio") {{
+                    lastActiveInput = el;
+                }}
+            }}, true);
+
+            function fillValueIntoInput(el, val) {{
+                if (!el || !val) return false;
+                try {{
+                    el.focus();
+                    const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+                    if (nativeSetter) {{
+                        nativeSetter.call(el, val);
+                    }} else {{
+                        el.value = val;
+                    }}
+                    el.dispatchEvent(new Event("input", {{ bubbles: true }}));
+                    el.dispatchEvent(new Event("change", {{ bubbles: true }}));
+                    return true;
+                }} catch (_) {{
+                    return false;
+                }}
+            }}
+
+            async function copyToClipboardSafe(text) {{
+                if (!text) return false;
+                try {{
+                    await navigator.clipboard.writeText(text);
+                    return true;
+                }} catch (_) {{
+                    try {{
+                        const ta = document.createElement("textarea");
+                        ta.value = text;
+                        ta.style.position = "fixed";
+                        ta.style.opacity = "0";
+                        document.body.appendChild(ta);
+                        ta.select();
+                        document.execCommand("copy");
+                        ta.remove();
+                        return true;
+                    }} catch (_) {{
+                        return false;
+                    }}
+                }}
+            }}
+
+            function mountFloatingCapsule() {{
+                if (window !== window.top) return;
+                if (document.getElementById("__gvault_capsule_host__")) return;
+                if (document.getElementById("urlText") && document.title.includes("授权回调")) return;
+                if (!document.body && !document.documentElement) return;
+
+                const host = document.createElement("div");
+                host.id = "__gvault_capsule_host__";
+                host.style.cssText = "position:fixed;z-index:2147483647;right:16px;bottom:24px;pointer-events:none;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;";
+                const savedTop = sessionStorage.getItem("__gvault_cap_top__");
+                if (savedTop) {{
+                    const y = parseFloat(savedTop);
+                    if (!isNaN(y) && y >= 12 && y <= window.innerHeight - 60) {{
+                        host.style.bottom = "auto";
+                        host.style.top = y + "px";
+                    }}
+                }}
+
+                const shadow = host.attachShadow({{ mode: "open" }});
+                shadow.innerHTML = `
+                    <style>
+                        * {{ box-sizing: border-box; user-select: none; -webkit-user-select: none; }}
+                        .wrap {{ pointer-events: auto; position: relative; display: flex; flex-direction: column; align-items: flex-end; }}
+                        .pill {{
+                            display: inline-flex; align-items: center; gap: 6px;
+                            height: 36px; padding: 0 13px; border-radius: 999px;
+                            background: rgba(255, 255, 255, 0.96); color: #202124;
+                            border: 1px solid rgba(26, 115, 232, 0.32);
+                            box-shadow: 0 4px 16px rgba(15, 23, 42, 0.14);
+                            font-size: 12px; font-weight: 600; cursor: pointer;
+                            backdrop-filter: blur(10px); transition: box-shadow 0.15s, border-color 0.15s;
+                        }}
+                        .pill:hover {{ border-color: #1a73e8; box-shadow: 0 6px 20px rgba(26, 115, 232, 0.22); }}
+                        .grip {{ color: #9aa0a6; font-size: 13px; margin-right: 1px; cursor: grab; }}
+                        .code {{ font-family: ui-monospace, SFMono-Regular, Consolas, monospace; color: #1a73e8; font-weight: 700; letter-spacing: 0.5px; }}
+                        .sec {{ font-size: 11px; color: #5f6368; font-weight: 500; }}
+                        .panel {{
+                            display: none; width: 288px; border-radius: 18px; padding: 12px;
+                            background: rgba(255, 255, 255, 0.98); color: #202124;
+                            border: 1px solid #dadce0;
+                            box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18);
+                            backdrop-filter: blur(12px);
+                        }}
+                        .panel.open {{ display: block; }}
+                        .hdr {{ display: flex; align-items: center; justify-content: space-between; gap: 8px; padding-bottom: 9px; border-bottom: 1px solid #f1f3f4; margin-bottom: 9px; }}
+                        .hdr-left {{ display: flex; align-items: center; gap: 7px; min-width: 0; flex: 1; cursor: pointer; }}
+                        .g-badge {{
+                            width: 24px; height: 24px; border-radius: 7px; background: #e8f0fe; color: #1a73e8;
+                            display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 12px; flex-shrink: 0;
+                        }}
+                        .email {{ font-size: 11.5px; font-weight: 700; color: #202124; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+                        .sub {{ font-size: 10px; color: #5f6368; }}
+                        .close-btn {{
+                            width: 24px; height: 24px; border-radius: 999px; border: none; background: #f1f3f4;
+                            color: #5f6368; font-size: 12px; cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+                        }}
+                        .close-btn:hover {{ background: #e8eaed; color: #202124; }}
+                        .grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 8px; }}
+                        .card {{
+                            padding: 7px 9px; border-radius: 11px; border: 1px solid #e8eaed; background: #f8fafd;
+                            cursor: pointer; text-align: left; transition: all 0.12s; display: flex; flex-direction: column; gap: 2px;
+                        }}
+                        .card:hover {{ border-color: #1a73e8; background: #e8f0fe; }}
+                        .card.full {{ grid-column: span 2; }}
+                        .c-lbl {{ font-size: 10px; color: #5f6368; font-weight: 600; display: flex; align-items: center; justify-content: space-between; }}
+                        .c-val {{ font-size: 11.5px; font-weight: 700; color: #202124; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+                        .tools {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; }}
+                        .t-btn {{
+                            padding: 6px 2px; border-radius: 9px; border: 1px solid #e8eaed; background: #ffffff;
+                            color: #3c4043; font-size: 10.5px; font-weight: 600; cursor: pointer; text-align: center; transition: all 0.12s;
+                        }}
+                        .t-btn:hover {{ background: #f1f3f4; border-color: #dadce0; color: #1a73e8; }}
+                        .toast {{
+                            position: absolute; bottom: calc(100% + 8px); right: 0;
+                            background: rgba(32, 33, 36, 0.92); color: #fff; padding: 5px 11px;
+                            border-radius: 999px; font-size: 11px; font-weight: 600; white-space: nowrap;
+                            box-shadow: 0 4px 12px rgba(0,0,0,0.18); opacity: 0; pointer-events: none; transition: opacity 0.15s;
+                        }}
+                        .toast.show {{ opacity: 1; }}
+                    </style>
+                    <div class="wrap">
+                        <div class="toast" id="capToast"></div>
+                        <div class="pill" id="capPill" title="点击展开快捷凭据面板（支持上下拖拽）">
+                            <span class="grip">⠿</span>
+                            <span id="pillText">🔑 快捷凭据</span>
+                        </div>
+                        <div class="panel" id="capPanel">
+                            <div class="hdr">
+                                <div class="hdr-left" id="copyEmailHdr" title="点击填入并复制邮箱">
+                                    <div class="g-badge">G</div>
+                                    <div style="min-width:0;flex:1">
+                                        <div class="email" id="hdrEmail"></div>
+                                        <div class="sub">点击卡片自动填入并复制</div>
+                                    </div>
+                                </div>
+                                <button class="close-btn" id="capClose" title="收起">✕</button>
+                            </div>
+                            <div class="grid">
+                                <button class="card" id="btnFillPwd">
+                                    <div class="c-lbl"><span>🔑 登录密码</span></div>
+                                    <div class="c-val" id="valPwd"></div>
+                                </button>
+                                <button class="card" id="btnFillTotp">
+                                    <div class="c-lbl"><span>⏱️ 2FA 验证码</span><span id="valTotpSec"></span></div>
+                                    <div class="c-val" id="valTotp" style="color:#1a73e8"></div>
+                                </button>
+                                <button class="card full" id="btnFillRec" style="display:none">
+                                    <div class="c-lbl"><span>🛡️ 辅助邮箱</span></div>
+                                    <div class="c-val" id="valRec"></div>
+                                </button>
+                            </div>
+                            <div class="tools">
+                                <button class="t-btn" id="btnBack" title="返回上一页">← 后退</button>
+                                <button class="t-btn" id="btnReload" title="刷新当前页面">↻ 刷新</button>
+                                <button class="t-btn" id="btnRefill" title="重新执行智能填充">⚡ 重填</button>
+                                <button class="t-btn" id="btnCopyUrl" title="复制当前页面网址">🔗 网址</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+
+                (document.body || document.documentElement).appendChild(host);
+
+                const pill = shadow.getElementById("capPill");
+                const pillText = shadow.getElementById("pillText");
+                const panel = shadow.getElementById("capPanel");
+                const toastEl = shadow.getElementById("capToast");
+                const hdrEmail = shadow.getElementById("hdrEmail");
+                const valPwd = shadow.getElementById("valPwd");
+                const valTotp = shadow.getElementById("valTotp");
+                const valTotpSec = shadow.getElementById("valTotpSec");
+                const btnFillRec = shadow.getElementById("btnFillRec");
+                const valRec = shadow.getElementById("valRec");
+
+                hdrEmail.textContent = targetEmail || "未指定邮箱";
+                valPwd.textContent = targetPassword ? "••••••••" : "未记录";
+                if (targetRecEmail) {{
+                    btnFillRec.style.display = "flex";
+                    valRec.textContent = targetRecEmail;
+                }}
+
+                let toastTimer = null;
+                function showCapToast(msg) {{
+                    toastEl.textContent = msg;
+                    toastEl.classList.add("show");
+                    if (toastTimer) clearTimeout(toastTimer);
+                    toastTimer = setTimeout(() => toastEl.classList.remove("show"), 1800);
+                }}
+
+                let autoCollapseTimer = null;
+                function resetAutoCollapse() {{
+                    if (autoCollapseTimer) clearTimeout(autoCollapseTimer);
+                    autoCollapseTimer = setTimeout(() => {{
+                        panel.classList.remove("open");
+                        pill.style.display = "inline-flex";
+                    }}, 8000);
+                }}
+
+                function openPanel() {{
+                    pill.style.display = "none";
+                    panel.classList.add("open");
+                    resetAutoCollapse();
+                }}
+
+                function closePanel() {{
+                    if (autoCollapseTimer) clearTimeout(autoCollapseTimer);
+                    panel.classList.remove("open");
+                    pill.style.display = "inline-flex";
+                }}
+
+                let startY = 0, startTop = 0, dragging = false;
+                pill.addEventListener("mousedown", (e) => {{
+                    if (e.button !== 0) return;
+                    startY = e.clientY;
+                    startTop = host.getBoundingClientRect().top;
+                    dragging = false;
+
+                    const onMove = (me) => {{
+                        const dy = me.clientY - startY;
+                        if (Math.abs(dy) > 5) {{
+                            dragging = true;
+                            const nextTop = Math.max(12, Math.min(window.innerHeight - 52, startTop + dy));
+                            host.style.bottom = "auto";
+                            host.style.top = nextTop + "px";
+                            sessionStorage.setItem("__gvault_cap_top__", String(nextTop));
+                        }}
+                    }};
+                    const onUp = () => {{
+                        window.removeEventListener("mousemove", onMove);
+                        window.removeEventListener("mouseup", onUp);
+                        if (!dragging) {{
+                            openPanel();
+                        }}
+                    }};
+                    window.addEventListener("mousemove", onMove);
+                    window.addEventListener("mouseup", onUp);
+                }});
+
+                shadow.getElementById("capClose").addEventListener("click", (e) => {{
+                    e.stopPropagation();
+                    closePanel();
+                }});
+
+                shadow.getElementById("copyEmailHdr").addEventListener("click", async () => {{
+                    resetAutoCollapse();
+                    if (!targetEmail) return;
+                    await copyToClipboardSafe(targetEmail);
+                    const emailEl = document.getElementById("identifierId") || document.querySelector('input[type="email"]') || lastActiveInput;
+                    const filled = fillValueIntoInput(emailEl, targetEmail);
+                    showCapToast(filled ? "✓ 已填入并复制邮箱" : "✓ 已复制邮箱");
+                }});
+
+                shadow.getElementById("btnFillPwd").addEventListener("click", async () => {{
+                    resetAutoCollapse();
+                    if (!targetPassword) {{
+                        showCapToast("当前账号未记录密码");
+                        return;
+                    }}
+                    await copyToClipboardSafe(targetPassword);
+                    const pwdEl = document.querySelector('input[name="Passwd"]') || document.querySelector('input[type="password"]') || lastActiveInput;
+                    const filled = fillValueIntoInput(pwdEl, targetPassword);
+                    showCapToast(filled ? "✓ 已填入并复制密码" : "✓ 已复制密码");
+                }});
+
+                shadow.getElementById("btnFillTotp").addEventListener("click", async () => {{
+                    resetAutoCollapse();
+                    const code = computeRealtimeTotp(targetTotpSecret);
+                    if (!code) {{
+                        showCapToast("当前账号未配置 2FA 密钥");
+                        return;
+                    }}
+                    await copyToClipboardSafe(code);
+                    const totpEl = document.querySelector('input[name="totpPin"]') ||
+                                   document.getElementById("idvPin") ||
+                                   document.querySelector('input[type="tel"][maxlength="6"]') ||
+                                   document.querySelector('input[autocomplete="one-time-code"]') ||
+                                   lastActiveInput;
+                    const filled = fillValueIntoInput(totpEl, code);
+                    showCapToast(filled ? `✓ 已填入并复制验证码 ${{code}}` : `✓ 已复制验证码 ${{code}}`);
+                }});
+
+                btnFillRec.addEventListener("click", async () => {{
+                    resetAutoCollapse();
+                    if (!targetRecEmail) return;
+                    await copyToClipboardSafe(targetRecEmail);
+                    const recEl = document.getElementById("knowledge-preregistered-email-response") ||
+                                  document.querySelector('input[name="knowledgePreregisteredEmailResponse"]') ||
+                                  document.querySelector('input[type="email"]') ||
+                                  lastActiveInput;
+                    const filled = fillValueIntoInput(recEl, targetRecEmail);
+                    showCapToast(filled ? "✓ 已填入并复制辅助邮箱" : "✓ 已复制辅助邮箱");
+                }});
+
+                shadow.getElementById("btnBack").addEventListener("click", () => {{
+                    window.history.back();
+                }});
+                shadow.getElementById("btnReload").addEventListener("click", () => {{
+                    window.location.reload();
+                }});
+                shadow.getElementById("btnRefill").addEventListener("click", () => {{
+                    resetAutoCollapse();
+                    emailFilled = false;
+                    pwdFilled = false;
+                    totpFilled = false;
+                    recEmailFilled = false;
+                    autoFill();
+                    showCapToast("⚡ 已重新执行自动填充");
+                }});
+                shadow.getElementById("btnCopyUrl").addEventListener("click", async () => {{
+                    resetAutoCollapse();
+                    await copyToClipboardSafe(window.location.href);
+                    showCapToast("✓ 已复制当前页面网址");
+                }});
+
+                function refreshCapsuleTotp() {{
+                    if (targetTotpSecret) {{
+                        const code = computeRealtimeTotp(targetTotpSecret);
+                        const rem = 30 - (Math.floor(Date.now() / 1000) % 30);
+                        if (code) {{
+                            const fmt = code.slice(0, 3) + " " + code.slice(3);
+                            pillText.innerHTML = `⏱️ <span class="code">${{fmt}}</span> <span class="sec">(${{rem}}s)</span>`;
+                            valTotp.textContent = fmt;
+                            valTotpSec.textContent = rem + "s";
+                            return;
+                        }}
+                    }}
+                    pillText.textContent = targetRecEmail ? "🛡️ 辅助凭据" : "🔑 快捷凭据";
+                    valTotp.textContent = "未配置";
+                    valTotpSec.textContent = "";
+                }}
+
+                refreshCapsuleTotp();
+                setInterval(refreshCapsuleTotp, 1000);
+            }}
+
+            function tickAll() {{
+                autoFill();
+                mountFloatingCapsule();
+            }}
+
+            window.addEventListener("DOMContentLoaded", tickAll);
+            window.addEventListener("load", tickAll);
+            const observer = new MutationObserver(tickAll);
             if (document.documentElement) {{
                 observer.observe(document.documentElement, {{ childList: true, subtree: true }});
             }}
-            const timer = setInterval(autoFill, 400);
+            const timer = setInterval(tickAll, 400);
             setTimeout(() => {{
                 clearInterval(timer);
                 observer.disconnect();
