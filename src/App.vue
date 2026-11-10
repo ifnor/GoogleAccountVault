@@ -1404,6 +1404,25 @@ function handleOpenCustomUrl() {
   openInApp(url);
 }
 
+async function clearCurrentAccountSession() {
+  if (!selectedRecord.value) return;
+  const email = selectedRecord.value.email;
+  const confirmed = await askConfirm({
+    title: "清理独立会话沙箱",
+    message: `确定要清除账号【${email}】独立会话窗口下的所有 Cookie 与本地缓存吗？这会关闭该账号已打开的窗口并登出当前 Google 会话。`,
+    type: "warning",
+    confirmText: "确定清理",
+    cancelText: "取消"
+  });
+  if (!confirmed) return;
+  try {
+    const msg = await invoke<string>("clear_account_browser_session", { email });
+    notify("✓ " + msg, "success", 2800);
+  } catch (err: any) {
+    notify("清理独立会话失败: " + err, "error");
+  }
+}
+
 // ==================== EXTERNAL BROWSER LAUNCH TAKEOVER (60s) ====================
 const isTakeoverActive = ref(false);
 const takeoverRemainingSec = ref(60);
@@ -4348,21 +4367,32 @@ onUnmounted(() => {
             />
           </div>
 
-          <div class="flex items-center justify-end gap-2 pt-2 border-t border-[#f1f3f4]">
+          <div class="flex items-center justify-between gap-2 pt-2 border-t border-[#f1f3f4]">
             <button
               type="button"
-              @click="showCustomUrlModal = false"
-              class="px-4 py-2 bg-[#f1f3f4] hover:bg-[#e8eaed] text-[#444746] rounded-xl text-xs font-medium"
+              @click="clearCurrentAccountSession"
+              class="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200/80 rounded-xl text-xs font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
+              title="关闭该账号的独立窗口并清除其隔离 Cookie 与本地缓存"
             >
-              取消
+              <RotateCcw class="w-3.5 h-3.5" />
+              <span>清理此账号会话缓存</span>
             </button>
-            <button
-              type="submit"
-              class="px-5 py-2 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium shadow-sm flex items-center gap-1.5"
-            >
-              <ExternalLink class="w-3.5 h-3.5" />
-              <span>在独立窗口打开</span>
-            </button>
+            <div class="flex items-center gap-2">
+              <button
+                type="button"
+                @click="showCustomUrlModal = false"
+                class="px-4 py-2 bg-[#f1f3f4] hover:bg-[#e8eaed] text-[#444746] rounded-xl text-xs font-medium cursor-pointer"
+              >
+                取消
+              </button>
+              <button
+                type="submit"
+                class="px-5 py-2 bg-[#1a73e8] hover:bg-[#1557b0] text-white rounded-xl text-xs font-medium shadow-sm flex items-center gap-1.5 cursor-pointer"
+              >
+                <ExternalLink class="w-3.5 h-3.5" />
+                <span>在独立窗口打开</span>
+              </button>
+            </div>
           </div>
         </form>
       </div>

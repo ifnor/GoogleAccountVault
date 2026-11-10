@@ -2054,6 +2054,64 @@ async fn open_in_app_browser(
     }
 }
 
+#[tauri::command]
+async fn clear_account_browser_session(
+    app: tauri::AppHandle,
+    email: String,
+) -> Result<String, String> {
+    let clean_email = email.trim().to_lowercase();
+    let email_uuid = uuid::Uuid::new_v5(&uuid::Uuid::NAMESPACE_DNS, clean_email.as_bytes());
+    let safe_label = format!("browser-{}", &email_uuid.to_string()[..8]);
+
+    #[cfg(not(target_os = "android"))]
+    {
+        if let Some(w) = app.get_webview_window(&safe_label) {
+            let _ = w.close();
+            std::thread::sleep(std::time::Duration::from_millis(350));
+        }
+
+        let session_dir = vault::vault_data_dir().join("sessions").join(&safe_label);
+        if session_dir.exists() {
+            let mut removed = false;
+            for _ in 0..8 {
+                if std::fs::remove_dir_all(&session_dir).is_ok() {
+                    removed = true;
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(150));
+            }
+            if !removed {
+                let eb_default = session_dir.join("EBWebView").join("Default");
+                for sub in [
+                    "Network",
+                    "Local Storage",
+                    "Session Storage",
+                    "IndexedDB",
+                    "Cache",
+                    "Code Cache",
+                    "Service Worker",
+                    "Cookies",
+                    "Cookies-journal",
+                ] {
+                    let target = eb_default.join(sub);
+                    let _ = if target.is_dir() {
+                        std::fs::remove_dir_all(&target)
+                    } else {
+                        std::fs::remove_file(&target)
+                    };
+                }
+            }
+        }
+        Ok(format!("已清理账号 [{}] 的独立会话 Cookie 与本地缓存", email))
+    }
+
+    #[cfg(target_os = "android")]
+    {
+        let _ = (app, safe_label);
+        Ok(format!("请在独立浏览器底部抽屉中点击「清理沙箱」清理 [{}] 的会话", email))
+    }
+}
+
 mod takeover_engine {
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::Mutex;
@@ -2973,6 +3031,7 @@ pub fn run() {
             parse_totp_input,
             generate_pwd,
             open_in_app_browser,
+            clear_account_browser_session,
             test_webdav_connection,
             save_webdav_config,
             load_webdav_config,
