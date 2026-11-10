@@ -52,7 +52,7 @@ import {
 import jsQR from "jsqr";
 import pkg from "../package.json";
 
-const appVersion = ref(pkg.version || "3.1.21");
+const appVersion = ref(pkg.version || "3.1.22");
 
 interface AccountRecord {
   id: string;
@@ -112,6 +112,17 @@ const autoSelectFirst = ref(localStorage.getItem("vault_auto_select_first") === 
 function toggleAutoSelectFirst() {
   autoSelectFirst.value = !autoSelectFirst.value;
   localStorage.setItem("vault_auto_select_first", autoSelectFirst.value ? "true" : "false");
+}
+
+const showListAvatar = ref(localStorage.getItem("vault_show_list_avatar") !== "false");
+function toggleShowListAvatar() {
+  showListAvatar.value = !showListAvatar.value;
+  localStorage.setItem("vault_show_list_avatar", showListAvatar.value ? "true" : "false");
+  notify(
+    showListAvatar.value ? "已开启：显示账号列表圆形头像" : "已隐藏列表圆形头像（极简紧凑模式）",
+    "info",
+    1800
+  );
 }
 
 function selectAccount(id: string) {
@@ -3453,25 +3464,46 @@ onUnmounted(() => {
                   <Square v-else class="w-4 h-4 text-[#80868b]" />
                 </button>
 
-                <!-- Star Pin Button -->
-                <button
-                  type="button"
-                  @click.stop="togglePinRecord(r)"
-                  class="p-0.5 md:p-1 rounded-full hover:bg-black/5 transition-colors flex-shrink-0 cursor-pointer"
-                  :title="r.is_pinned ? '取消星标置顶' : '设为星标置顶 (固定在列表顶部)'"
+                <!-- Mode A: Avatar with Bottom-Right Star Pin Badge -->
+                <div
+                  v-if="showListAvatar"
+                  class="w-8 h-8 md:w-9 md:h-9 rounded-full bg-[#e8f0fe] text-[#1a73e8] font-bold text-xs md:text-sm flex items-center justify-center flex-shrink-0 relative"
                 >
-                  <Star
-                    class="w-3.5 h-3.5 transition-colors"
-                    :class="r.is_pinned ? 'text-amber-400 fill-amber-400' : 'text-[#dadce0] hover:text-amber-400'"
-                  />
-                </button>
-
-                <div class="w-8 h-8 md:w-9 md:h-9 rounded-full bg-[#e8f0fe] text-[#1a73e8] font-bold text-xs md:text-sm flex items-center justify-center flex-shrink-0 relative">
-                  {{ (r.email[0] || 'G').toUpperCase() }}
+                  <span>{{ (r.email[0] || 'G').toUpperCase() }}</span>
+                  <button
+                    type="button"
+                    @click.stop="togglePinRecord(r)"
+                    :class="[
+                      'w-4 h-4 rounded-full flex items-center justify-center absolute -bottom-0.5 -right-0.5 transition-all cursor-pointer shadow-2xs ring-1 ring-white',
+                      r.is_pinned
+                        ? 'bg-amber-50 text-amber-400 hover:scale-110'
+                        : 'bg-white text-[#dadce0] hover:text-amber-400 hover:scale-110'
+                    ]"
+                    :title="r.is_pinned ? '取消星标置顶' : '设为星标置顶 (固定在列表顶部)'"
+                  >
+                    <Star
+                      class="w-2.5 h-2.5 transition-colors"
+                      :class="r.is_pinned ? 'text-amber-400 fill-amber-400' : 'text-[#dadce0] hover:text-amber-400'"
+                    />
+                  </button>
                 </div>
+
                 <div class="min-w-0 flex-1">
                   <!-- Row 1: Email (full width on mobile, with inline status badges on desktop) -->
                   <div class="text-xs font-semibold text-[#202124] flex items-center gap-1.5 min-w-0">
+                    <!-- Mode B (No Avatar): Compact Inline Star Pin Button -->
+                    <button
+                      v-if="!showListAvatar"
+                      type="button"
+                      @click.stop="togglePinRecord(r)"
+                      class="p-0.5 -ml-0.5 rounded-full hover:bg-black/5 transition-colors flex-shrink-0 cursor-pointer"
+                      :title="r.is_pinned ? '取消星标置顶' : '设为星标置顶 (固定在列表顶部)'"
+                    >
+                      <Star
+                        class="w-3.5 h-3.5 transition-colors"
+                        :class="r.is_pinned ? 'text-amber-400 fill-amber-400' : 'text-[#dadce0] hover:text-amber-400'"
+                      />
+                    </button>
                     <span class="truncate">{{ r.email }}</span>
                     <span :class="[getStatusBadgeClass(r.status), 'hidden md:inline-flex flex-shrink-0']" title="账号状态">{{ r.status || '待录入' }}</span>
                     <span :class="[getAntigravityBadgeClass(r.antigravity_status), 'hidden md:inline-flex flex-shrink-0']" title="Antigravity (反重力) 状态">
@@ -4860,6 +4892,45 @@ onUnmounted(() => {
                     :class="[
                       'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
                       autoSelectFirst ? 'translate-x-5' : 'translate-x-0'
+                    ]"
+                  />
+                </button>
+              </div>
+
+              <!-- Show / Hide List Avatar Preference Row -->
+              <div class="pt-3 border-t border-[#dadce0]/60 flex items-center justify-between gap-3">
+                <div class="flex items-center gap-3 min-w-0">
+                  <div class="w-10 h-10 rounded-xl bg-white border border-[#dadce0]/70 flex items-center justify-center text-[#1a73e8] shadow-xs flex-shrink-0 font-bold text-sm">
+                    G
+                  </div>
+                  <div class="min-w-0">
+                    <h3 class="text-xs font-bold text-[#202124] flex items-center gap-2">
+                      <span>显示账号列表圆形头像</span>
+                      <span
+                        v-if="!showListAvatar"
+                        class="px-2 py-0.5 rounded-full bg-[#e8f0fe] text-[#1a73e8] text-[10px] font-semibold whitespace-nowrap"
+                      >
+                        极简紧凑模式
+                      </span>
+                    </h3>
+                    <p class="text-[11px] text-[#5f6368] mt-0.5">
+                      {{ showListAvatar ? '已开启：显示首字母圆形头像与右下角星标角标。' : '已隐藏：省去首字母圆形头像，为长邮箱与辅助邮箱释放更多横向空间。' }}
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  @click="toggleShowListAvatar"
+                  :class="[
+                    'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none',
+                    showListAvatar ? 'bg-[#1a73e8]' : 'bg-[#dadce0]'
+                  ]"
+                >
+                  <span
+                    :class="[
+                      'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                      showListAvatar ? 'translate-x-5' : 'translate-x-0'
                     ]"
                   />
                 </button>
